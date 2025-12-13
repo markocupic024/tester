@@ -1071,6 +1071,14 @@ class Tester:
                 line = error.get('lastLine', 'N/A')
                 story.append(Paragraph(f"• Line {line}: {msg}", styles['Normal']))
         
+        warnings = w3c.get('warnings', [])
+        if warnings:
+            story.append(Paragraph("<b>Warnings:</b>", styles['Normal']))
+            for warning in warnings:
+                msg = warning.get('message', 'N/A')
+                line = warning.get('lastLine', 'N/A')
+                story.append(Paragraph(f"• Line {line}: {msg}", styles['Normal']))
+        
         story.append(PageBreak())
 
     def _add_vulnerability_details(self, story, styles, heading_style):
