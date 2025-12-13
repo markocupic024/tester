@@ -44,7 +44,6 @@ class Tester:
             'owasp_zap': {},
             'nuclei': {},
             'w3c_validator': {},
-            'testssl': {},
             'robots_sitemap': {},
             'dns': {}
         }
@@ -62,7 +61,6 @@ class Tester:
             ('Security Headers Analysis', self.check_security_headers),
             ('SSL/TLS Testing (sslyze)', self.test_ssl),
             ('W3C HTML Validator', self.validate_w3c),
-            ('TestSSL.sh', self.run_testssl),
             ('Robots.txt & Sitemap', self.check_robots_sitemap),
             ('DNS Records', self.check_dns),
             # Uncomment the following lines to enable additional security scans:
@@ -409,83 +407,6 @@ class Tester:
             self.results['ssl'] = {'error': 'sslyze not installed', 'https_enabled': self.url.startswith('https')}
         except Exception as e:
             self.results['ssl'] = {'error': str(e)}
-
-    def run_testssl(self):
-        """Run testssl.sh for comprehensive SSL/TLS testing"""
-        print("[*] Running testssl.sh...")
-        
-        try:
-            parsed_url = urlparse(self.url)
-            hostname = parsed_url.netloc.split(':')[0]
-            if not hostname:
-                raise ValueError("Invalid URL format.")
-        except Exception as e:
-            self.results['testssl'] = {'error': f"URL Parsing Error: {str(e)}"}
-            return
-
-        try:
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-                json_file = f.name
-
-            cmd = [
-                'testssl.sh',
-                '--jsonfile', json_file,
-                '--quiet',
-                '--fast',
-                hostname
-            ]
-            
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=300
-            )
-            
-            if os.path.exists(json_file):
-                with open(json_file, 'r') as f:
-                    content = f.read()
-                    if content.strip():
-                        # testssl.sh outputs JSON lines format
-                        findings = []
-                        vulnerabilities = []
-                        for line in content.strip().split('\n'):
-                            try:
-                                item = json.loads(line)
-                                if item.get('severity') in ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']:
-                                    vulnerabilities.append({
-                                        'id': item.get('id'),
-                                        'finding': item.get('finding'),
-                                        'severity': item.get('severity'),
-                                        'cve': item.get('cve', '')
-                                    })
-                                findings.append(item)
-                            except json.JSONDecodeError:
-                                continue
-                        
-                        self.results['testssl'] = {
-                            'total_findings': len(findings),
-                            'vulnerabilities': vulnerabilities,
-                            'summary': {
-                                'critical': len([v for v in vulnerabilities if v['severity'] == 'CRITICAL']),
-                                'high': len([v for v in vulnerabilities if v['severity'] == 'HIGH']),
-                                'medium': len([v for v in vulnerabilities if v['severity'] == 'MEDIUM']),
-                                'low': len([v for v in vulnerabilities if v['severity'] == 'LOW'])
-                            }
-                        }
-                    else:
-                        self.results['testssl'] = {'error': 'No output from testssl.sh'}
-                
-                os.unlink(json_file)
-            else:
-                self.results['testssl'] = {'error': result.stderr or 'testssl.sh failed to produce output'}
-                
-        except FileNotFoundError:
-            self.results['testssl'] = {'skipped': 'testssl.sh not installed'}
-        except subprocess.TimeoutExpired:
-            self.results['testssl'] = {'error': 'testssl.sh timed out after 300 seconds'}
-        except Exception as e:
-            self.results['testssl'] = {'error': str(e)}
 
     def run_owasp_zap(self):
         """Run OWASP ZAP baseline scan"""
@@ -843,9 +764,6 @@ class Tester:
         if self._is_test_enabled('security_headers') or self._is_test_enabled('ssl'):
             self._add_security_details(story, styles, heading_style)
         
-        if self._is_test_enabled('testssl'):
-            self._add_testssl_details(story, styles, heading_style)
-        
         if self._is_test_enabled('w3c_validator'):
             self._add_w3c_details(story, styles, heading_style)
         
@@ -1018,39 +936,6 @@ class Tester:
         
         story.append(PageBreak())
 
-    def _add_testssl_details(self, story, styles, heading_style):
-        """Add testssl.sh details to PDF"""
-        story.append(Paragraph("SSL/TLS Analysis (testssl.sh)", heading_style))
-        testssl = self.results['testssl']
-        
-        if testssl.get('skipped'):
-            story.append(Paragraph(f"Skipped: {testssl.get('skipped')}", styles['Normal']))
-            return
-        
-        summary = testssl.get('summary', {})
-        story.append(Paragraph(
-            f"<b>Findings: Critical: {summary.get('critical', 0)} | "
-            f"High: {summary.get('high', 0)} | "
-            f"Medium: {summary.get('medium', 0)} | "
-            f"Low: {summary.get('low', 0)}</b>",
-            styles['Normal']
-        ))
-        story.append(Spacer(1, 0.2*inch))
-        
-        vulnerabilities = testssl.get('vulnerabilities', [])[:15]
-        if vulnerabilities:
-            story.append(Paragraph("<b>Vulnerabilities Found:</b>", styles['Normal']))
-            for vuln in vulnerabilities:
-                severity = vuln.get('severity', 'N/A')
-                story.append(Paragraph(
-                    f"• [{severity}] {vuln.get('id', 'N/A')}: {vuln.get('finding', 'N/A')[:100]}",
-                    styles['Normal']
-                ))
-                if vuln.get('cve'):
-                    story.append(Paragraph(f"  CVE: {vuln.get('cve')}", styles['Normal']))
-        
-        story.append(PageBreak())
-
     def _add_w3c_details(self, story, styles, heading_style):
         """Add W3C validation details to PDF"""
         story.append(Paragraph("HTML Validation (W3C)", heading_style))
@@ -1215,7 +1100,6 @@ Tests performed:
   - Pa11y (Accessibility)
   - Security Headers (Mozilla Observatory)
   - SSL/TLS Testing (sslyze)
-  - testssl.sh (SSL/TLS Analysis)
   - W3C HTML Validator
   - Robots.txt & Sitemap Check
   - DNS Records Analysis

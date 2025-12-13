@@ -20,7 +20,6 @@ A comprehensive testing suite that checks your website for SEO, security, access
 
 ### Security
 - **sslyze** - SSL/TLS configuration analysis
-- **testssl.sh** - Deep SSL/TLS vulnerability scanning
 - **Mozilla Observatory** - Security headers check (CSP, HSTS, etc.)
 - **OWASP ZAP** - Automated vulnerability scanning (optional)
 - **Nuclei** - Fast CVE and misconfiguration detection (optional)
@@ -155,7 +154,6 @@ Here's what gets checked:
 | **SEO** | Lighthouse | Meta tags, mobile optimization, structured data |
 | **SEO** | Custom checks | Robots.txt, sitemaps, DNS configuration |
 | **Security** | sslyze | SSL certificates, cipher suites, protocol support |
-| **Security** | testssl.sh | SSL vulnerabilities, weak configurations |
 | **Security** | Mozilla Observatory | Security headers, HTTPS enforcement |
 | **Security** | OWASP ZAP* | XSS, SQL injection, CSRF attacks |
 | **Security** | Nuclei* | Known vulnerabilities, exposed services |
@@ -271,7 +269,6 @@ For details about the underlying tools:
 - [OWASP ZAP](https://www.zaproxy.org/) - Security scanning
 - [Nuclei](https://nuclei.projectdiscovery.io/) - Vulnerability detection
 - [sslyze](https://github.com/nabla-c0d3/sslyze) - SSL analysis
-- [testssl.sh](https://testssl.sh/) - SSL testing
 - [Mozilla Observatory](https://observatory.mozilla.org/) - Security headers
 - [W3C Validator](https://validator.w3.org/) - HTML validation
 - [dnspython](https://www.dnspython.org/) - DNS tools
