@@ -232,45 +232,32 @@ class Tester:
             self.results['security_headers'] = {'error': f"URL Parsing Error: {str(e)}"}
             return
 
-        api_url = "https://http-observatory.security.mozilla.org/api/v1/analyze"
-        params = {'host': host, 'rescan': 'true'}
-        
+        # Use the Mozilla Observatory v2 API endpoint (as documented in the FAQ)
+        api_url = "https://observatory-api.mdn.mozilla.net/api/v2/scan"
+        params = {'host': host}
+
         try:
-            # --- PHASE 1: Start Scan ---
+            # Single POST request - the v2 API returns results directly (no polling needed)
             response = requests.post(api_url, params=params, timeout=30)
             response.raise_for_status()
-            scan_data = response.json()
-            
-            if scan_data and 'scan_id' in scan_data:
-                result_url = f"{api_url}?host={host}"
-                
-                # --- PHASE 2: Polling for Results ---
-                max_attempts = 12
-                for _ in range(max_attempts):
-                    time.sleep(10) 
-                    
-                    result = requests.get(result_url, timeout=30)
-                    result.raise_for_status()
-                    data = result.json()
-                    
-                    state = data.get('state')
-                    
-                    if state == 'FINISHED':
-                        self.results['security_headers'] = {
-                            'grade': data.get('grade'),
-                            'score': data.get('score'),
-                            'tests_passed': data.get('tests_passed'),
-                            'tests_failed': data.get('tests_failed'),
-                            'tests_quantity': data.get('tests_quantity'),
-                            'report_url': f"https://observatory.mozilla.org/analyze?host={host}"
-                        }
-                        break
-                    elif state == 'ABORTED':
-                        self.results['security_headers'] = {'error': 'Mozilla Observatory scan was aborted.'}
-                        return
-                else:
-                    self.results['security_headers'] = {'error': 'Mozilla Observatory scan timed out after 120 seconds.'}
-                    return
+            data = response.json()
+
+            # The v2 API returns results directly in the response
+            if data and 'grade' in data:
+                self.results['security_headers'] = {
+                    'grade': data.get('grade'),
+                    'score': data.get('score'),
+                    'tests_passed': data.get('tests_passed'),
+                    'tests_failed': data.get('tests_failed'),
+                    'tests_quantity': data.get('tests_quantity'),
+                    'report_url': data.get('details_url', f"https://developer.mozilla.org/en-US/observatory/analyze?host={host}"),
+                    'scan_id': data.get('id'),
+                    'scanned_at': data.get('scanned_at')
+                }
+            elif data and 'error' in data and data['error']:
+                self.results['security_headers'] = {'error': f'Mozilla Observatory error: {data["error"]}'}
+            else:
+                self.results['security_headers'] = {'error': 'Invalid response from Mozilla Observatory API.'}
 
             # --- PHASE 3: Manual Header Check ---
             response = requests.get(self.url, timeout=30, verify=True)
