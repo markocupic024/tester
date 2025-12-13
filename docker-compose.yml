@@ -1,0 +1,59 @@
+services:
+  tester:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: tester:latest
+    container_name: tester
+    volumes:
+      # Mount reports directory for output
+      - ./reports:/output
+    environment:
+      # Chromium configuration
+      - CHROME_BIN=/usr/bin/chromium
+      - CHROME_PATH=/usr/bin/chromium
+      - PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+      - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+      # Display configuration for headless
+      - DISPLAY=:99
+    # Resource limits (adjust as needed)
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+        reservations:
+          cpus: '2'
+          memory: 2G
+    # Network configuration
+    network_mode: bridge
+    # Security options
+    security_opt:
+      - seccomp:unconfined
+    # Shared memory size for Chromium
+    shm_size: '2gb'
+
+  # Optional: Run with OWASP ZAP support
+  # Uncomment this service and update tester.py to enable ZAP scans
+  # tester-with-zap:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   image: tester:latest
+  #   volumes:
+  #     - ./reports:/output
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #   environment:
+  #     - CHROME_BIN=/usr/bin/chromium
+  #     - CHROME_PATH=/usr/bin/chromium
+  #     - PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+  #     - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: '4'
+  #         memory: 6G
+  #   network_mode: bridge
+  #   security_opt:
+  #     - seccomp:unconfined
+  #   shm_size: '2gb'

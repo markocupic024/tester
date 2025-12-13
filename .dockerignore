@@ -1,0 +1,50 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Reports and output
+reports/
+*.pdf
+*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+pip-log.txt
+pip-delete-this-directory.txt
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Documentation
+README.md
+LICENSE
+*.md
+
+# Docker
+.dockerignore
+docker-compose.yml
+
+# Scripts
+*.sh
+test.sh
+quick-test.sh
+setup.sh
+
+# Misc
+*.log
+.env
+.cache/
