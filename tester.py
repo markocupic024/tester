@@ -335,16 +335,39 @@ class Tester:
 
             if result.stdout:
                 data = json.loads(result.stdout)
-                
-                server_scan = data.get('server_scan_results', [None])[0]
+
+                server_scan = None
+                if 'server_scan_results' in data:
+                    server_scan_results = data.get('server_scan_results', [])
+                    if isinstance(server_scan_results, list) and len(server_scan_results) > 0:
+                        server_scan = server_scan_results[0]
+                elif 'server_scan_result' in data:
+                    server_scan = data.get('server_scan_result')
+                elif len(data) == 1 and isinstance(list(data.values())[0], dict):
+                    server_scan = list(data.values())[0]
+
+                if server_scan is None:
+                    server_scan = data
                 if not server_scan:
                     self.results['ssl'] = {'error': 'sslyze returned no server scan results.'}
                     return
 
-                scan_results = server_scan.get('scan_commands_results', {})
-                
+                scan_results = None
+
+                if 'scan_commands_results' in server_scan:
+                    scan_results = server_scan['scan_commands_results']
+                elif 'scan_result' in server_scan:
+                    scan_results = server_scan['scan_result']
+                elif isinstance(server_scan, dict):
+                    scan_results = server_scan
+                else:
+                    scan_results = {}
+
                 # --- Extract Certificate Info ---
                 cert_info_result = scan_results.get('certificate_info', {})
+                if not cert_info_result:
+                    cert_info_result = scan_results.get('certificate', {})
+
                 certificate_is_trusted = False
                 cert_details = {}
                 
