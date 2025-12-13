@@ -61,7 +61,7 @@ docker build -t tester .
 2. **Run a test:**
 
 ```bash
-docker run --rm -v $(pwd)/reports:/output tester https://example.com -o /output/report.pdf
+docker run --rm -v $(pwd)/reports:/output tester https://example.com -o /output
 ```
 
 ## 📖 Usage
@@ -75,8 +75,8 @@ docker run --rm -v $(pwd)/reports:/output tester https://example.com
 ### Advanced Options
 
 ```bash
-# Custom output filename
-docker run --rm -v $(pwd)/reports:/output tester https://example.com -o /output/custom_report.pdf
+# Custom output directory
+docker run --rm -v $(pwd)/my-reports:/output tester https://example.com -o /output
 
 # Save JSON results
 docker run --rm -v $(pwd)/reports:/output tester https://example.com -j /output/results.json
@@ -85,7 +85,7 @@ docker run --rm -v $(pwd)/reports:/output tester https://example.com -j /output/
 docker run --rm -v $(pwd)/reports:/output tester https://example.com -w 8
 
 # Combine options
-docker run --rm -v $(pwd)/reports:/output tester https://example.com -o /output/report.pdf -j /output/data.json -w 10
+docker run --rm -v $(pwd)/reports:/output tester https://example.com -o /output -j /output/data.json -w 10
 ```
 
 ### Command Line Arguments
@@ -93,7 +93,7 @@ docker run --rm -v $(pwd)/reports:/output tester https://example.com -o /output/
 | Argument | Description | Default |
 |----------|-------------|---------|
 | `url` | Website URL to test (required) | - |
-| `-o, --output` | Output PDF report filename | website_test_report.pdf |
+| `-o, --output` | Output directory for reports | /output |
 | `-j, --json` | Save JSON results to file | - |
 | `-w, --workers` | Number of parallel workers | 5 |
 | `-h, --help` | Show help message | - |
@@ -103,19 +103,26 @@ docker run --rm -v $(pwd)/reports:/output tester https://example.com -o /output/
 The tool generates a comprehensive PDF report containing:
 
 ### Executive Summary
-- Lighthouse scores (Performance, Accessibility, SEO, Best Practices)
 - Total accessibility violations
 - Security header status and grade
 - SSL certificate status
 - HTML validation errors
 - Key metrics overview
 
+### Separate Lighthouse HTML Report
+- Comprehensive performance analysis in lighthouse_report.html
+- Core Web Vitals, accessibility, SEO, and best practices audits
+- Detailed recommendations and optimization suggestions
+- Interactive charts and visualizations
+- Full-page screenshot and network analysis
+
 ### Detailed Sections
 
-1. **Lighthouse Analysis**
-   - Performance metrics (FCP, LCP, TBT, CLS, Speed Index)
-   - Failed audits by category
-   - Optimization recommendations
+1. **Lighthouse HTML Report**
+   - Separate comprehensive HTML report (lighthouse_report.html)
+   - Performance metrics, accessibility, SEO, and best practices
+   - Detailed recommendations with screenshots
+   - Interactive charts and full analysis
 
 2. **Accessibility Analysis (axe-core)**
    - Violations by severity (Critical, Serious, Moderate, Minor)
@@ -253,8 +260,9 @@ docker run --memory="8g" --rm -v $(pwd)/reports:/output tester https://example.c
 ├── docker-compose.yml    # Docker Compose configuration
 ├── README.MD             # This file
 └── reports/              # Output directory (created automatically)
-    ├── report.pdf
-    └── results.json
+    ├── report.pdf        # Main PDF report
+    ├── lighthouse_report.html  # Lighthouse HTML report
+    └── results.json      # Raw JSON data
 ```
 
 ## 🔐 Security Notes

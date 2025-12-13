@@ -29,9 +29,10 @@ warnings.filterwarnings('ignore')
 
 
 class Tester:
-    def __init__(self, url: str, max_workers: int = 5):
+    def __init__(self, url: str, max_workers: int = 5, output_directory: str = '/output'):
         self.url = url
         self.max_workers = max_workers
+        self.output_directory = output_directory
         self.enabled_tests = set()  # Track which tests are enabled
         self.results = {
             'url': url,
@@ -88,16 +89,16 @@ class Tester:
         """Run Google Lighthouse tests"""
         print("[*] Running Lighthouse tests...")
         try:
-            # Run lighthouse with all categories
+            # Generate separate HTML report in the same directory as the PDF
+            html_file = os.path.join(self.output_directory, 'lighthouse_report.html')
             cmd = [
                 'lighthouse', self.url,
-                '--output=json',
-                '--output-path=stdout',
+                '--output=html',
+                f'--output-path={html_file}',
                 '--chrome-flags="--headless --no-sandbox --disable-gpu"',
-                '--only-categories=performance,accessibility,best-practices,seo',
                 '--quiet'
             ]
-            
+
             result = subprocess.run(
                 ' '.join(cmd),
                 shell=True,
@@ -105,61 +106,20 @@ class Tester:
                 text=True,
                 timeout=300
             )
-            
-            if result.returncode == 0:
-                data = json.loads(result.stdout)
-                
-                # Extract scores
-                categories = data.get('categories', {})
+
+            if result.returncode == 0 and os.path.exists(html_file):
                 self.results['lighthouse'] = {
-                    'performance': {
-                        'score': categories.get('performance', {}).get('score', 0) * 100,
-                        'metrics': {}
-                    },
-                    'accessibility': {
-                        'score': categories.get('accessibility', {}).get('score', 0) * 100,
-                        'audits': []
-                    },
-                    'best_practices': {
-                        'score': categories.get('best-practices', {}).get('score', 0) * 100,
-                        'audits': []
-                    },
-                    'seo': {
-                        'score': categories.get('seo', {}).get('score', 0) * 100,
-                        'audits': []
-                    }
+                    'html_report_generated': True,
+                    'html_file': 'lighthouse_report.html',  # Relative path for user reference
+                    'full_path': html_file,
+                    'success': True
                 }
-                
-                # Extract performance metrics
-                audits = data.get('audits', {})
-                perf_metrics = {
-                    'first-contentful-paint': audits.get('first-contentful-paint', {}).get('displayValue'),
-                    'largest-contentful-paint': audits.get('largest-contentful-paint', {}).get('displayValue'),
-                    'total-blocking-time': audits.get('total-blocking-time', {}).get('displayValue'),
-                    'cumulative-layout-shift': audits.get('cumulative-layout-shift', {}).get('displayValue'),
-                    'speed-index': audits.get('speed-index', {}).get('displayValue'),
-                }
-                self.results['lighthouse']['performance']['metrics'] = perf_metrics
-                
-                # Extract failed audits
-                for category_name in ['accessibility', 'best-practices', 'seo']:
-                    category_key = category_name.replace('-', '_')
-                    cat_audits = categories.get(category_name, {}).get('auditRefs', [])
-                    failed = []
-                    for audit_ref in cat_audits:
-                        audit_id = audit_ref['id']
-                        audit_data = audits.get(audit_id, {})
-                        if audit_data.get('score') is not None and audit_data.get('score') < 1:
-                            failed.append({
-                                'id': audit_id,
-                                'title': audit_data.get('title'),
-                                'description': audit_data.get('description'),
-                                'score': audit_data.get('score')
-                            })
-                    self.results['lighthouse'][category_key]['audits'] = failed
-                
+                print(f"[✓] Lighthouse HTML report generated: lighthouse_report.html")
             else:
-                self.results['lighthouse']['error'] = result.stderr
+                self.results['lighthouse'] = {
+                    'error': result.stderr or 'Failed to generate Lighthouse HTML report',
+                    'success': False
+                }
                 
         except Exception as e:
             self.results['lighthouse']['error'] = str(e)
@@ -182,7 +142,6 @@ class Tester:
             cmd = [
                 'pa11y', self.url,
                 '--runner', 'axe',
-                '--runner', 'htmlcs',
                 '--config', config_file,
                 '--reporter', 'json'
             ]
@@ -815,6 +774,7 @@ class Tester:
         story.append(Paragraph(f"URL: {self.url}", styles['Normal']))
         story.append(Paragraph(f"Generated: {self.results['timestamp']}", styles['Normal']))
         story.append(Paragraph(f"Tests Completed: {len(self.enabled_tests)}", styles['Normal']))
+        story.append(Paragraph("<i>Note: Lighthouse performance analysis is available in separate HTML report (lighthouse_report.html)</i>", styles['Normal']))
         story.append(Spacer(1, 0.3*inch))
         
         # Executive Summary
@@ -822,13 +782,7 @@ class Tester:
         
         summary_data = []
         
-        # Lighthouse scores
-        if self._is_test_enabled('lighthouse'):
-            lh = self.results['lighthouse']
-            summary_data.append(['Lighthouse Performance', f"{lh.get('performance', {}).get('score', 0):.0f}/100"])
-            summary_data.append(['Lighthouse Accessibility', f"{lh.get('accessibility', {}).get('score', 0):.0f}/100"])
-            summary_data.append(['Lighthouse SEO', f"{lh.get('seo', {}).get('score', 0):.0f}/100"])
-            summary_data.append(['Lighthouse Best Practices', f"{lh.get('best_practices', {}).get('score', 0):.0f}/100"])
+        # Note: Lighthouse results are available in separate HTML report
         
         # Pa11y violations
         if self._is_test_enabled('pa11y'):
@@ -881,8 +835,7 @@ class Tester:
         story.append(PageBreak())
         
         # Detailed Results - only add sections for enabled tests
-        if self._is_test_enabled('lighthouse'):
-            self._add_lighthouse_details(story, styles, heading_style)
+        # Note: Lighthouse results are available in separate HTML report
         
         if self._is_test_enabled('pa11y'):
             self._add_pa11y_details(story, styles, heading_style)
@@ -909,99 +862,6 @@ class Tester:
         doc.build(story)
         print(f"[✓] PDF report generated: {output_file}")
 
-    def _add_lighthouse_details(self, story, styles, heading_style):
-        """Add Lighthouse details to PDF"""
-        story.append(Paragraph("Lighthouse Analysis", heading_style))
-        lh = self.results['lighthouse']
-        
-        # All scores summary
-        story.append(Paragraph("<b>Scores Summary:</b>", styles['Normal']))
-        for category in ['performance', 'accessibility', 'seo', 'best_practices']:
-            if category in lh:
-                score = lh[category].get('score', 0)
-                story.append(Paragraph(f"• {category.replace('_', ' ').title()}: {score:.0f}/100", styles['Normal']))
-        story.append(Spacer(1, 0.2*inch))
-        
-        # Performance section - detailed
-        if 'performance' in lh:
-            perf = lh['performance']
-            story.append(Paragraph("<b>Performance Metrics:</b>", styles['Normal']))
-            metrics = perf.get('metrics', {})
-            for key, value in metrics.items():
-                if value:
-                    story.append(Paragraph(f"• {key.replace('-', ' ').title()}: {value}", styles['Normal']))
-            story.append(Spacer(1, 0.2*inch))
-            
-            # Performance issues with details
-            perf_audits = perf.get('audits', [])
-            if perf_audits:
-                story.append(Paragraph("<b>Performance Issues:</b>", styles['Normal']))
-                for audit in perf_audits:
-                    title = audit.get('title', 'N/A')
-                    display_val = audit.get('displayValue', '')
-                    story.append(Paragraph(f"<b>• {title}</b>" + (f" ({display_val})" if display_val else ""), styles['Normal']))
-                    
-                    # Show affected items/elements
-                    items = audit.get('items', [])
-                    if items:
-                        story.append(Paragraph(f"  Affected items: {len(items)}", styles['Normal']))
-                        for item in items:
-                            if item.get('url'):
-                                story.append(Paragraph(f"    → URL: {html.escape(item['url'])}...", styles['Normal']))
-                            if item.get('selector'):
-                                story.append(Paragraph(f"    → Selector: {html.escape(item['selector'])}", styles['Normal']))
-                            if item.get('snippet'):
-                                story.append(Paragraph(f"    → HTML: {html.escape(item['snippet'])}...", styles['Normal']))
-                            if item.get('nodeLabel'):
-                                story.append(Paragraph(f"    → Element: {html.escape(item['nodeLabel'])}", styles['Normal']))
-                            if item.get('wastedMs'):
-                                story.append(Paragraph(f"    → Potential savings: {item['wastedMs']:.0f}ms", styles['Normal']))
-                            if item.get('wastedBytes'):
-                                story.append(Paragraph(f"    → Potential savings: {item['wastedBytes']/1024:.1f} KB", styles['Normal']))
-                    story.append(Spacer(1, 0.05*inch))
-                story.append(Spacer(1, 0.1*inch))
-        
-        # Other categories with detailed audits
-        for category in ['accessibility', 'seo', 'best_practices']:
-            if category in lh and lh[category].get('audits'):
-                cat_name = category.replace('_', ' ').title()
-                story.append(Paragraph(f"<b>{cat_name} Issues:</b>", styles['Normal']))
-                audits = lh[category]['audits']
-                
-                for audit in audits:
-                    title = html.escape(audit.get('title', 'N/A'))
-                    display_val = html.escape(audit.get('displayValue', ''))
-                    story.append(Paragraph(f"<b>• {title}</b>" + (f" ({display_val})" if display_val else ""), styles['Normal']))
-                    
-                    # Show description
-                    desc = audit.get('description', '')
-                    if desc:
-                        story.append(Paragraph(f"  {html.escape(desc)}", styles['Normal']))
-                    
-                    # Show affected items
-                    items = audit.get('items', [])
-                    if items:
-                        story.append(Paragraph(f"  <b>Affected elements ({len(items)}):</b>", styles['Normal']))
-                        for item in items:
-                            # Show selector
-                            if item.get('selector'):
-                                story.append(Paragraph(f"    → Selector: {html.escape(item['selector'])}", styles['Normal']))
-                            # Show HTML snippet
-                            if item.get('snippet'):
-                                story.append(Paragraph(f"    → HTML: {html.escape(item['snippet'])}", styles['Normal']))
-                            # Show node label
-                            if item.get('nodeLabel'):
-                                story.append(Paragraph(f"    → Element: {html.escape(item['nodeLabel'])}", styles['Normal']))
-                            # Show URL
-                            if item.get('url'):
-                                story.append(Paragraph(f"    → URL: {html.escape(item['url'])}", styles['Normal']))
-                            # Show source
-                            if item.get('source'):
-                                story.append(Paragraph(f"    → Source: {html.escape(item['source'])}", styles['Normal']))
-                    story.append(Spacer(1, 0.08*inch))
-                story.append(Spacer(1, 0.15*inch))
-        
-        story.append(PageBreak())
 
     def _add_pa11y_details(self, story, styles, heading_style):
         """Add Pa11y accessibility details to PDF"""
@@ -1339,7 +1199,7 @@ def main():
         epilog="""
 Examples:
   python tester.py https://example.com
-  python tester.py https://example.com -o report.pdf -w 8
+  python tester.py https://example.com -o ./reports -w 8
   python tester.py https://example.com --json results.json
 
 Tests performed:
@@ -1359,8 +1219,8 @@ Optional (uncomment in code to enable):
     )
     
     parser.add_argument('url', help='Website URL to test')
-    parser.add_argument('-o', '--output', default='website_test_report.pdf',
-                       help='Output PDF report filename (default: website_test_report.pdf)')
+    parser.add_argument('-o', '--output', default='/output',
+                       help='Output directory for reports (default: /output). PDF and HTML reports will be generated here.')
     parser.add_argument('-j', '--json', help='Save JSON results to file')
     parser.add_argument('-w', '--workers', type=int, default=5,
                        help='Number of parallel workers (default: 5)')
@@ -1376,17 +1236,18 @@ Optional (uncomment in code to enable):
     print("="*80)
     
     # Run tests
-    tester = Tester(args.url, max_workers=args.workers)
+    tester = Tester(args.url, max_workers=args.workers, output_directory=args.output)
     test_results = tester.run_all_tests()
-    
+
     # Save JSON if requested
     if args.json:
         with open(args.json, 'w') as f:
             json.dump(test_results, f, indent=2, default=str)
         print(f"\n[✓] JSON results saved to: {args.json}")
-    
-    # Generate PDF report
-    tester.generate_pdf_report(args.output)
+
+    # Generate PDF report in the output directory
+    pdf_filename = os.path.join(args.output, 'report.pdf')
+    tester.generate_pdf_report(pdf_filename)
     
     print("\n" + "="*80)
     print("  TESTING COMPLETE")
