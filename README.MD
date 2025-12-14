@@ -57,7 +57,7 @@ docker build -t tester .
 Run your test:
 
 ```bash
-docker run --rm -v $(pwd)/reports:/output tester https://example.com
+docker run --rm $(pwd)/reports:/output tester https://example.com
 ```
 
 ## How to Use
@@ -67,7 +67,7 @@ docker run --rm -v $(pwd)/reports:/output tester https://example.com
 Just run it on any website:
 
 ```bash
-docker run --rm -v $(pwd)/reports:/output tester https://example.com
+docker run --rm $(pwd)/reports:/output tester https://example.com
 ```
 
 ### Command Options
@@ -84,16 +84,16 @@ docker run --rm -v $(pwd)/reports:/output tester https://example.com
 
 ```bash
 # Test with custom output location
-docker run --rm -v $(pwd)/my-reports:/output tester https://example.com -o /output
+docker run --rm $(pwd)/my-reports:/output tester https://example.com -o /output
 
 # Save results as JSON too
-docker run --rm -v $(pwd)/reports:/output tester https://example.com -j /output/results.json
+docker run --rm $(pwd)/reports:/output tester https://example.com -j /output/results.json
 
 # Speed it up with more workers
-docker run --rm -v $(pwd)/reports:/output tester https://example.com -w 8
+docker run --rm $(pwd)/reports:/output tester https://example.com -w 8
 
 # Everything combined
-docker run --rm -v $(pwd)/reports:/output tester https://example.com -o /output -j /output/data.json -w 10
+docker run --rm $(pwd)/reports:/output tester https://example.com -o /output -j /output/data.json -w 10
 ```
 
 ## What You Get
@@ -181,13 +181,13 @@ Run tests in parallel to finish faster:
 
 ```bash
 # Use 10 workers instead of the default 5
-docker run --rm -v $(pwd)/reports:/output tester https://example.com -w 10
+docker run --rm $(pwd)/reports:/output tester https://example.com -w 10
 ```
 
 Give Docker more resources for better performance:
 
 ```bash
-docker run --rm --cpus="4" --memory="4g" -v $(pwd)/reports:/output tester https://example.com
+docker run --rm --cpus="4" --memory="4g" $(pwd)/reports:/output tester https://example.com
 ```
 
 ## Common Issues
@@ -209,7 +209,7 @@ Can't write to the reports folder? Fix the permissions:
 sudo chown -R $USER:$USER reports/
 
 # Or run Docker as your user
-docker run --user $(id -u):$(id -g) --rm -v $(pwd)/reports:/output tester https://example.com
+docker run --user $(id -u):$(id -g) --rm $(pwd)/reports:/output tester https://example.com
 ```
 
 ### Tests Take Too Long
@@ -226,7 +226,7 @@ timeout=600  # or even higher
 Getting memory errors? Give Docker more RAM:
 
 ```bash
-docker run --memory="8g" --rm -v $(pwd)/reports:/output tester https://example.com
+docker run --memory="8g" --rm $(pwd)/reports:/output tester https://example.com
 ```
 
 ## Project Files
