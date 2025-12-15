@@ -190,6 +190,10 @@ Give Docker more resources for better performance:
 docker run --rm --cpus="4" --memory="4g" $(pwd)/reports:/output tester https://example.com
 ```
 
+### Use the correct Nuclei package for your CPU architecture
+
+Use the correct Nuclei package for your CPU architecture to maximize scanning speed, change it in the Dockerfile. Default architecture is ARM.
+
 ## Common Issues
 
 ### Lighthouse Won't Run

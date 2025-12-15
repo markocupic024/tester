@@ -13,7 +13,6 @@ import tempfile
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
-import time
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
@@ -479,19 +478,20 @@ class Tester:
     def run_nuclei(self):
         """Run Nuclei vulnerability scanner"""
         print("[*] Running Nuclei vulnerability scanner...")
+
         try:
             cmd = [
                 'nuclei',
                 '-u', self.url,
-                '-json',
-                '-silent'
+                '-jsonl',
+                '-silent',
             ]
             
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=300
+                timeout=600
             )
             
             if result.stdout:
@@ -500,15 +500,44 @@ class Tester:
                     if line:
                         try:
                             vuln = json.loads(line)
+                            info = vuln.get('info', {})
                             vulnerabilities.append({
-                                'template': vuln.get('template-id'),
-                                'name': vuln.get('info', {}).get('name'),
-                                'severity': vuln.get('info', {}).get('severity'),
-                                'matched_at': vuln.get('matched-at')
+                            # Identity
+                            'template_id': vuln.get('template-id'),
+                            'name': info.get('name'),
+                            'severity': info.get('severity', 'unknown'),
+                            'type': vuln.get('type'),
+
+                            # Description
+                            'description': info.get('description'),
+                            'impact': info.get('impact'),
+                            'remediation': info.get('remediation'),
+
+                            # Target
+                            'host': vuln.get('host'),
+                            'matched_at': vuln.get('matched-at'),
+
+                            # Evidence sources (CRITICAL)
+                            'extracted_results': vuln.get('extracted-results', []),
+                            'matcher_name': vuln.get('matcher-name'),
+                            'response': vuln.get('response'),
+                            'request': vuln.get('request'),
+                            'curl_command': vuln.get('curl-command'),
+
+                            # Classification
+                            'classification': {
+                                'cvss_score': info.get('classification', {}).get('cvss-score'),
+                                'cwe_id': info.get('classification', {}).get('cwe-id'),
+                            },
+
+                            # Metadata
+                            'tags': info.get('tags', []),
+                            'references': info.get('reference', []),
                             })
+
                         except json.JSONDecodeError:
                             continue
-                
+
                 self.results['nuclei'] = {
                     'total_vulnerabilities': len(vulnerabilities),
                     'vulnerabilities': vulnerabilities,
@@ -516,7 +545,9 @@ class Tester:
                         'critical': len([v for v in vulnerabilities if v.get('severity') == 'critical']),
                         'high': len([v for v in vulnerabilities if v.get('severity') == 'high']),
                         'medium': len([v for v in vulnerabilities if v.get('severity') == 'medium']),
-                        'low': len([v for v in vulnerabilities if v.get('severity') == 'low'])
+                        'low': len([v for v in vulnerabilities if v.get('severity') == 'low']),
+                        'info': len([v for v in vulnerabilities if v.get('severity') == 'info']),
+                        'unknown': len([v for v in vulnerabilities if v.get('severity') == 'unknown'])
                     }
                 }
             else:
@@ -748,7 +779,7 @@ class Tester:
         # Nuclei (only if enabled)
         if self._is_test_enabled('nuclei'):
             nuclei = self.results['nuclei']
-            summary_data.append(['Vulnerabilities (Nuclei)', str(nuclei.get('total_vulnerabilities', 0))])
+            summary_data.append(['Security Findings', str(nuclei.get('total_vulnerabilities', 0))])
         
         if summary_data:
             summary_table = Table(summary_data, colWidths=[4*inch, 2*inch])
@@ -978,7 +1009,7 @@ class Tester:
 
     def _add_vulnerability_details(self, story, styles, heading_style):
         """Add vulnerability scan details to PDF"""
-        story.append(Paragraph("Vulnerability Scans", heading_style))
+        story.append(Paragraph("Security Scans", heading_style))
         
         # OWASP ZAP
         if self._is_test_enabled('owasp_zap'):
@@ -1003,27 +1034,136 @@ class Tester:
         # Nuclei
         if self._is_test_enabled('nuclei'):
             nuclei = self.results['nuclei']
-            
-            story.append(Paragraph(f"<b>Nuclei Scan: {nuclei.get('total_vulnerabilities', 0)} vulnerabilities</b>", styles['Normal']))
-            
-            summary = nuclei.get('summary', {})
+
             story.append(Paragraph(
-                f"Critical: {summary.get('critical', 0)} | "
-                f"High: {summary.get('high', 0)} | "
-                f"Medium: {summary.get('medium', 0)} | "
-                f"Low: {summary.get('low', 0)}",
+                f"<b>Security Scan — {nuclei.get('total_vulnerabilities', 0)} Findings</b>",
                 styles['Normal']
             ))
-            story.append(Spacer(1, 0.2*inch))
-            
+
+            summary = nuclei.get('summary', {})
+            story.append(Paragraph(
+                f"<b>Severity Breakdown:</b> "
+                f"Critical {summary.get('critical', 0)} | "
+                f"High {summary.get('high', 0)} | "
+                f"Medium {summary.get('medium', 0)} | "
+                f"Low {summary.get('low', 0)} | "
+                f"Info {summary.get('info', 0)} | "
+                f"Unknown {summary.get('unknown', 0)}",
+                styles['Normal']
+            ))
+            story.append(Spacer(1, 0.25 * inch))
+
             vulns = nuclei.get('vulnerabilities', [])
-            for vuln in vulns:
+
+            for idx, vuln in enumerate(vulns, start=1):
+                severity = (vuln.get('severity') or 'unknown').upper()
+                scan_type = (vuln.get('type') or 'unknown').lower()
+
+                # ── Stable finding header ─────────────────────────────
                 story.append(Paragraph(
-                    f"• [{vuln.get('severity', 'N/A').upper()}] {vuln.get('name', 'N/A')}",
+                    f"• <b>Finding #{idx}</b> — <b>[{severity}]</b> {vuln.get('name', 'Unnamed Issue')}",
                     styles['Normal']
                 ))
-                story.append(Paragraph(f"  Template: {vuln.get('template', 'N/A')}", styles['Normal']))
-                story.append(Spacer(1, 0.05*inch))
+
+                # Template ID (always)
+                story.append(Paragraph(
+                    f"<b>Template ID:</b> {vuln.get('template_id', 'N/A')}",
+                    styles['Normal']
+                ))
+
+                # Scan type (always)
+                story.append(Paragraph(
+                    f"<b>Scan Type:</b> {scan_type}",
+                    styles['Normal']
+                ))
+
+                target = (
+                    vuln.get('matched_at')
+                    or vuln.get('host')
+                    or vuln.get('target')
+                    or 'N/A'
+                )
+
+                story.append(Paragraph(
+                    f"<b>Target:</b> {target}",
+                    styles['Normal']
+                ))
+
+                # ── Description (only if meaningful) ──────────────────
+                if vuln.get('description'):
+                    story.append(Paragraph(
+                        f"<b>Description:</b> {vuln['description']}",
+                        styles['Normal']
+                    ))
+
+                # ── Impact (skip for tech/info noise) ─────────────────
+                if vuln.get('impact'):
+                    story.append(Paragraph(
+                        f"<b>Impact:</b> {vuln['impact']}",
+                        styles['Normal']
+                    ))
+
+                # ── Classification (if exists) ────────────────────────
+                classification = vuln.get('classification', {})
+                class_parts = []
+
+                if classification.get('cvss_score'):
+                    class_parts.append(f"CVSS {classification['cvss_score']}")
+                if classification.get('cwe_id'):
+                    cwe = classification['cwe_id']
+                    if isinstance(cwe, list):
+                        cwe = ', '.join(cwe)
+                    class_parts.append(f"CWE {cwe}")
+
+                if class_parts:
+                    story.append(Paragraph(
+                        f"<b>Classification:</b> {' | '.join(class_parts)}",
+                        styles['Normal']
+                    ))
+
+                # ── Evidence ──────────────────────────────
+                extracted = vuln.get('extracted_results', [])
+                if extracted:
+                    story.append(Paragraph(
+                        f"<b>Extracted Results:</b> {', '.join(map(str, extracted))}",
+                        styles['Normal']
+                    ))
+
+                # ── Matcher name (very important for tech / info templates)
+                if vuln.get('matcher_name'):
+                    story.append(Paragraph(
+                        f"<b>Matcher:</b> {vuln['matcher_name']}",
+                        styles['Normal']
+                    ))
+
+                # ── Reproduction (only if useful) ──────────────────────
+                if vuln.get('curl_command'):
+                    story.append(Paragraph(
+                        f"<b>Reproduce:</b> {vuln['curl_command']}",
+                        styles['Normal']
+                    ))
+
+                # ── Remediation (only if exists) ───────────────────────
+                if vuln.get('remediation'):
+                    story.append(Paragraph(
+                        f"<b>Remediation:</b> {vuln['remediation']}",
+                        styles['Normal']
+                    ))
+
+                # ── References (optional) ──────────────────────────────
+                references = vuln.get('references', [])
+                if references:
+                    ref_text = ', '.join(references[:2])
+                    if len(references) > 2:
+                        ref_text += f" (+{len(references) - 2} more)"
+                    story.append(Paragraph(
+                        f"<b>References:</b> {ref_text}",
+                        styles['Normal']
+                    ))
+
+                story.append(Spacer(1, 0.2 * inch))
+
+
         
         story.append(PageBreak())
 

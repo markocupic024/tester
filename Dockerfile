@@ -51,11 +51,11 @@ RUN micromamba run -n base pip install --no-cache-dir \
 RUN micromamba run -n base pip install --no-cache-dir sslyze
 
 # Install Nuclei (optional - uncomment if needed)
-# RUN wget -q https://github.com/projectdiscovery/nuclei/releases/download/v3.1.5/nuclei_3.1.5_linux_amd64.zip && \
-#    unzip nuclei_3.1.5_linux_amd64.zip && \
+# RUN wget -q https://github.com/projectdiscovery/nuclei/releases/download/v3.6.0/nuclei_3.6.0_linux_arm.zip && \
+#    unzip nuclei_3.6.0_linux_arm.zip && \
 #    mv nuclei /usr/local/bin/ && \
-#    rm nuclei_3.1.5_linux_amd64.zip && \
-#    nuclei -update-templates || true
+#    rm nuclei_3.6.0_linux_arm.zip && \
+#    nuclei -update-templates
 
 # Install testssl.sh
 RUN git clone --depth 1 https://github.com/drwetter/testssl.sh.git /opt/testssl.sh && \
