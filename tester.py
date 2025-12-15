@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import tempfile
+import re
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
@@ -421,16 +422,45 @@ class Tester:
         """Run OWASP ZAP baseline scan"""
         print("[*] Running OWASP ZAP baseline scan...")
         try:
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-                report_file = f.name
+            # Check if Docker is available
+            docker_check = subprocess.run(
+                ['docker', '--version'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if docker_check.returncode != 0:
+                self.results['owasp_zap'] = {'skipped': 'Docker CLI not available'}
+                print("[!] Docker CLI not found. ZAP scan skipped.")
+                return
+            
+            # Check if ZAP image exists, pull if not
+            image_check = subprocess.run(
+                ['docker', 'image', 'inspect', 'zaproxy/zap-stable'],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if image_check.returncode != 0:
+                print("[*] ZAP Docker image not found locally, pulling...")
+                pull_result = subprocess.run(
+                    ['docker', 'pull', 'zaproxy/zap-stable'],
+                    capture_output=True,
+                    text=True,
+                    timeout=120
+                )
+                if pull_result.returncode != 0:
+                    self.results['owasp_zap'] = {
+                        'error': f'Failed to pull ZAP image: {pull_result.stderr[:500] if pull_result.stderr else "Unknown error"}'
+                    }
+                    print(f"[!] Failed to pull ZAP image: {pull_result.stderr[:200] if pull_result.stderr else 'Unknown error'}")
+                    return
             
             cmd = [
                 'docker', 'run', '--rm',
-                '-v', f'{os.path.dirname(report_file)}:/zap/wrk:rw',
-                'owasp/zap2docker-stable',
+                'zaproxy/zap-stable',
                 'zap-baseline.py',
                 '-t', self.url,
-                '-J', f'/zap/wrk/{os.path.basename(report_file)}',
                 '-I'
             ]
             
@@ -441,39 +471,89 @@ class Tester:
                 timeout=300
             )
             
-            if os.path.exists(report_file):
-                with open(report_file, 'r') as f:
-                    data = json.load(f)
-                
-                alerts = data.get('site', [{}])[0].get('alerts', [])
-                
+            # ZAP returns non-zero exit codes when alerts are found, which is normal
+            # Only treat as error if stdout is empty or contains critical errors
+            if not result.stdout and result.stderr:
+                error_msg = result.stderr[:500] if result.stderr else 'Unknown error'
                 self.results['owasp_zap'] = {
-                    'total_alerts': len(alerts),
-                    'alerts': [
-                        {
-                            'name': alert.get('name'),
-                            'risk': alert.get('riskdesc'),
-                            'confidence': alert.get('confidence'),
-                            'description': alert.get('desc', '')[:200]
-                        }
-                        for alert in alerts
-                    ],
-                    'summary': {
-                        'high': len([a for a in alerts if 'High' in a.get('riskdesc', '')]),
-                        'medium': len([a for a in alerts if 'Medium' in a.get('riskdesc', '')]),
-                        'low': len([a for a in alerts if 'Low' in a.get('riskdesc', '')]),
-                        'info': len([a for a in alerts if 'Informational' in a.get('riskdesc', '')])
-                    }
+                    'error': f'ZAP scan failed: {error_msg}'
                 }
+                print(f"[!] ZAP scan failed: {error_msg[:200]}")
+                return
+            
+            # Extract summary counts from final summary line (these are unique alert types)
+            # Format: "FAIL-NEW: 0     FAIL-INPROG: 0  WARN-NEW: 14    WARN-INPROG: 0  INFO: 0 IGNORE: 0       PASS: 53"
+            fail_new_match = re.search(r'FAIL-NEW:\s*(\d+)', result.stdout)
+            warn_new_match = re.search(r'WARN-NEW:\s*(\d+)', result.stdout)
+            info_match = re.search(r'INFO:\s*(\d+)', result.stdout)
+            
+            fail_count = int(fail_new_match.group(1)) if fail_new_match else 0
+            warn_count = int(warn_new_match.group(1)) if warn_new_match else 0
+            info_count = int(info_match.group(1)) if info_match else 0
+            
+            # Parse unique alert types from stdout (not occurrences)
+            # Format: "WARN-NEW: Alert Name [ID] x count" - count is occurrences, we want unique types
+            parsed_alerts = []
+            seen_alerts = set()  # Track unique alerts by ID to avoid duplicates
+            
+            lines = result.stdout.split('\n')
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
                 
-                os.unlink(report_file)
-            else:
-                self.results['owasp_zap'] = {'skipped': 'ZAP Docker not available or scan failed'}
+                # Match WARN-NEW or FAIL-NEW alert lines
+                warn_match = re.match(r'WARN-NEW:\s+(.+?)\s+\[(\d+)\]\s+x\s+(\d+)', line)
+                fail_match = re.match(r'FAIL-NEW:\s+(.+?)\s+\[(\d+)\]\s+x\s+(\d+)', line)
+                
+                if warn_match:
+                    alert_name = warn_match.group(1).strip()
+                    alert_id = warn_match.group(2)
+                    # Only add unique alert types, not occurrences
+                    if alert_id not in seen_alerts:
+                        seen_alerts.add(alert_id)
+                        parsed_alerts.append({
+                            'name': alert_name,
+                            'risk': 'Medium',
+                            'id': alert_id
+                        })
+                elif fail_match:
+                    alert_name = fail_match.group(1).strip()
+                    alert_id = fail_match.group(2)
+                    # Only add unique alert types, not occurrences
+                    if alert_id not in seen_alerts:
+                        seen_alerts.add(alert_id)
+                        parsed_alerts.append({
+                            'name': alert_name,
+                            'risk': 'High',
+                            'id': alert_id
+                        })
+            
+            # Use summary counts for totals (these are the correct unique alert counts)
+            total_alerts = fail_count + warn_count + info_count
+            
+            self.results['owasp_zap'] = {
+                'total_alerts': total_alerts,
+                'alerts': parsed_alerts,
+                'summary': {
+                    'high': fail_count,
+                    'medium': warn_count,
+                    'low': 0,
+                    'info': info_count
+                }
+            }
+            
+            print(f"[✓] ZAP scan completed: {total_alerts} unique alerts found ({fail_count} high, {warn_count} medium, {info_count} info)")
                 
         except FileNotFoundError:
             self.results['owasp_zap'] = {'skipped': 'Docker not available'}
+            print("[!] Docker command not found. ZAP scan skipped.")
+        except subprocess.TimeoutExpired:
+            self.results['owasp_zap'] = {'error': 'ZAP scan timed out after 300 seconds'}
+            print("[!] ZAP scan timed out")
         except Exception as e:
             self.results['owasp_zap'] = {'error': str(e)}
+            print(f"[!] ZAP scan error: {e}")
 
     def run_nuclei(self):
         """Run Nuclei vulnerability scanner"""
@@ -552,7 +632,10 @@ class Tester:
                 }
             else:
                 self.results['nuclei'] = {'completed': True, 'total_vulnerabilities': 0, 'vulnerabilities': []}
-                
+        
+        except subprocess.TimeoutExpired:
+            self.results['nuclei'] = {'error': 'Nuclei scan timed out after 600 seconds'}
+            print("[!] Nuclei scan timed out")
         except FileNotFoundError:
             self.results['nuclei'] = {'skipped': 'Nuclei not installed'}
         except Exception as e:
@@ -1025,9 +1108,38 @@ class Tester:
                 styles['Normal']
             ))
             
-            alerts = zap.get('alerts', [])[:10]
-            for alert in alerts:
-                story.append(Paragraph(f"• [{alert.get('risk', 'N/A')}] {alert.get('name', 'N/A')}", styles['Normal']))
+            alerts = zap.get('alerts', [])
+            if alerts:
+                # Group alerts by risk level
+                high_alerts = [a for a in alerts if a.get('risk') == 'High']
+                medium_alerts = [a for a in alerts if a.get('risk') == 'Medium']
+                low_alerts = [a for a in alerts if a.get('risk') == 'Low']
+                info_alerts = [a for a in alerts if a.get('risk') == 'Informational']
+                
+                if high_alerts:
+                    story.append(Paragraph(f"<b>High Risk Alerts ({len(high_alerts)}):</b>", styles['Normal']))
+                    for alert in high_alerts[:10]:
+                        story.append(Paragraph(f"• {html.escape(alert.get('name', 'Unknown'))}", styles['Normal']))
+                    story.append(Spacer(1, 0.1*inch))
+                
+                if medium_alerts:
+                    story.append(Paragraph(f"<b>Medium Risk Alerts ({len(medium_alerts)}):</b>", styles['Normal']))
+                    for alert in medium_alerts[:10]:
+                        story.append(Paragraph(f"• {html.escape(alert.get('name', 'Unknown'))}", styles['Normal']))
+                    story.append(Spacer(1, 0.1*inch))
+                
+                if low_alerts:
+                    story.append(Paragraph(f"<b>Low Risk Alerts ({len(low_alerts)}):</b>", styles['Normal']))
+                    for alert in low_alerts[:10]:
+                        story.append(Paragraph(f"• {html.escape(alert.get('name', 'Unknown'))}", styles['Normal']))
+                    story.append(Spacer(1, 0.1*inch))
+                
+                if info_alerts:
+                    story.append(Paragraph(f"<b>Informational ({len(info_alerts)}):</b>", styles['Normal']))
+                    for alert in info_alerts[:5]:
+                        story.append(Paragraph(f"• {html.escape(alert.get('name', 'Unknown'))}", styles['Normal']))
+            else:
+                story.append(Paragraph("No detailed alerts available.", styles['Normal']))
             
             story.append(Spacer(1, 0.2*inch))
         

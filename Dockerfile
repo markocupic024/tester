@@ -17,7 +17,25 @@ RUN apt-get update && apt-get install -y \
     dnsutils \
     openssl \
     bash \
+    # Install ZAP (optional - uncomment if needed)
+    # ca-certificates \
+    # gnupg \
+    # lsb-release \
     && rm -rf /var/lib/apt/lists/*
+
+# Install ZAP (optional - uncomment if needed)
+# RUN ARCH=$(dpkg --print-architecture) && \
+#    if [ "$ARCH" = "amd64" ]; then DOCKER_ARCH="x86_64"; \
+#    elif [ "$ARCH" = "arm64" ]; then DOCKER_ARCH="aarch64"; \
+#    elif [ "$ARCH" = "armhf" ] || [ "$ARCH" = "armv7l" ]; then DOCKER_ARCH="armv7"; \
+#    else DOCKER_ARCH="x86_64"; fi && \
+#    DOCKER_VERSION="27.3.1" && \
+#    curl -fsSL "https://download.docker.com/linux/static/stable/${DOCKER_ARCH}/docker-${DOCKER_VERSION}.tgz" -o /tmp/docker.tgz && \
+#    tar -xz -C /tmp -f /tmp/docker.tgz && \
+#    mv /tmp/docker/docker /usr/local/bin/ && \
+#    rm -rf /tmp/docker /tmp/docker.tgz && \
+#    chmod +x /usr/local/bin/docker && \
+#    docker --version
 
 # Install Node.js tools
 RUN npm install -g \
@@ -51,10 +69,16 @@ RUN micromamba run -n base pip install --no-cache-dir \
 RUN micromamba run -n base pip install --no-cache-dir sslyze
 
 # Install Nuclei (optional - uncomment if needed)
-# RUN wget -q https://github.com/projectdiscovery/nuclei/releases/download/v3.6.0/nuclei_3.6.0_linux_arm.zip && \
-#    unzip nuclei_3.6.0_linux_arm.zip && \
+# RUN ARCH=$(dpkg --print-architecture) && \
+#    if [ "$ARCH" = "amd64" ]; then NUCLEI_ARCH="linux_amd64"; \
+#    elif [ "$ARCH" = "arm64" ]; then NUCLEI_ARCH="linux_arm64"; \
+#    elif [ "$ARCH" = "armhf" ] || [ "$ARCH" = "armv7l" ]; then NUCLEI_ARCH="linux_arm"; \
+#    else NUCLEI_ARCH="linux_amd64"; fi && \
+#    NUCLEI_VERSION="3.6.0" && \
+#    wget -q https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_${NUCLEI_ARCH}.zip && \
+#    unzip nuclei_${NUCLEI_VERSION}_${NUCLEI_ARCH}.zip && \
 #    mv nuclei /usr/local/bin/ && \
-#    rm nuclei_3.6.0_linux_arm.zip && \
+#    rm nuclei_${NUCLEI_VERSION}_${NUCLEI_ARCH}.zip && \
 #    nuclei -update-templates
 
 # Install testssl.sh
