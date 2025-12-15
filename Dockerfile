@@ -69,17 +69,17 @@ RUN micromamba run -n base pip install --no-cache-dir \
 RUN micromamba run -n base pip install --no-cache-dir sslyze
 
 # Install Nuclei (optional - uncomment if needed)
-# RUN ARCH=$(dpkg --print-architecture) && \
-#    if [ "$ARCH" = "amd64" ]; then NUCLEI_ARCH="linux_amd64"; \
-#    elif [ "$ARCH" = "arm64" ]; then NUCLEI_ARCH="linux_arm64"; \
-#    elif [ "$ARCH" = "armhf" ] || [ "$ARCH" = "armv7l" ]; then NUCLEI_ARCH="linux_arm"; \
-#    else NUCLEI_ARCH="linux_amd64"; fi && \
-#    NUCLEI_VERSION="3.6.0" && \
-#    wget -q https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_${NUCLEI_ARCH}.zip && \
-#    unzip nuclei_${NUCLEI_VERSION}_${NUCLEI_ARCH}.zip && \
-#    mv nuclei /usr/local/bin/ && \
-#    rm nuclei_${NUCLEI_VERSION}_${NUCLEI_ARCH}.zip && \
-#    nuclei -update-templates
+RUN ARCH=$(dpkg --print-architecture) && \
+   if [ "$ARCH" = "amd64" ]; then NUCLEI_ARCH="linux_amd64"; \
+   elif [ "$ARCH" = "arm64" ]; then NUCLEI_ARCH="linux_arm64"; \
+   elif [ "$ARCH" = "armhf" ] || [ "$ARCH" = "armv7l" ]; then NUCLEI_ARCH="linux_arm"; \
+   else NUCLEI_ARCH="linux_arm64"; fi && \
+   NUCLEI_VERSION="3.6.0" && \
+   wget -q https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_${NUCLEI_ARCH}.zip && \
+   unzip nuclei_${NUCLEI_VERSION}_${NUCLEI_ARCH}.zip && \
+   mv nuclei /usr/local/bin/ && \
+   rm nuclei_${NUCLEI_VERSION}_${NUCLEI_ARCH}.zip && \
+   nuclei -update-templates
 
 # Install testssl.sh
 RUN git clone --depth 1 https://github.com/drwetter/testssl.sh.git /opt/testssl.sh && \
