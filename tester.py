@@ -29,10 +29,13 @@ warnings.filterwarnings('ignore')
 
 
 class Tester:
-    def __init__(self, url: str, max_workers: int = 5, output_directory: str = '/output'):
+    def __init__(self, url: str, max_workers: int = 5, output_directory: str = '/output', 
+                 enable_zap: bool = False, enable_nuclei: bool = False):
         self.url = url
         self.max_workers = max_workers
         self.output_directory = output_directory
+        self.enable_zap = enable_zap
+        self.enable_nuclei = enable_nuclei
         self.enabled_tests = set()  # Track which tests are enabled
         self.results = {
             'url': url,
@@ -49,13 +52,13 @@ class Tester:
         }
 
     def run_all_tests(self):
-        """Run all tests in parallel"""
+        """Run all tests in parallel based on configuration"""
         print(f"\n{'='*80}")
         print(f"Starting comprehensive tests for: {self.url}")
         print(f"{'='*80}\n")
         
-        # Define test functions - comment/uncomment to enable/disable tests
-        tests = [
+        # Define all available tests
+        all_tests = [
             ('Lighthouse (Performance/SEO/Accessibility/Best Practices)', self.run_lighthouse),
             ('Pa11y (Accessibility)', self.run_pa11y),
             ('Security Headers Analysis', self.check_security_headers),
@@ -63,13 +66,19 @@ class Tester:
             ('W3C HTML Validator', self.validate_w3c),
             ('Robots.txt & Sitemap', self.check_robots_sitemap),
             ('DNS Records', self.check_dns),
-            # Uncomment the following lines to enable additional security scans:
-            # ('OWASP ZAP Security Scan', self.run_owasp_zap),
-            # ('Nuclei Vulnerability Scanner', self.run_nuclei),
         ]
         
+        # Conditionally add security scans based on configuration
+        if self.enable_zap:
+            all_tests.append(('OWASP ZAP Security Scan', self.run_owasp_zap))
+        
+        if self.enable_nuclei:
+            all_tests.append(('Nuclei Vulnerability Scanner', self.run_nuclei))
+        
+        print()  # Empty line for readability
+        
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = {executor.submit(test_func): name for name, test_func in tests}
+            futures = {executor.submit(test_func): name for name, test_func in all_tests}
             
             for future in as_completed(futures):
                 test_name = futures[future]
@@ -83,9 +92,44 @@ class Tester:
         
         return self.results
 
+    def _parse_url_hostname(self):
+        """Helper method to parse URL and extract hostname consistently"""
+        try:
+            parsed_url = urlparse(self.url)
+            hostname = parsed_url.netloc.split(':')[0]
+            if not hostname:
+                raise ValueError("Invalid URL format or missing hostname")
+            return hostname
+        except Exception as e:
+            raise ValueError(f"URL parsing error: {str(e)}")
+
+    def _parse_url_host(self):
+        """Helper method to parse URL and extract host (with port if present) consistently"""
+        try:
+            parsed_url = urlparse(self.url)
+            host = parsed_url.netloc
+            if not host:
+                raise ValueError("Invalid URL format or missing host")
+            return host
+        except Exception as e:
+            raise ValueError(f"URL parsing error: {str(e)}")
+
+    def _parse_url_base(self):
+        """Helper method to parse URL and extract base URL (scheme + netloc) consistently"""
+        try:
+            parsed_url = urlparse(self.url)
+            base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+            return base_url
+        except Exception as e:
+            raise ValueError(f"URL parsing error: {str(e)}")
+
     def run_lighthouse(self):
         """Run Google Lighthouse tests"""
         print("[*] Running Lighthouse tests...")
+        
+        # Initialize result structure
+        self.results['lighthouse'] = {}
+        
         try:
             # Generate separate HTML report in the same directory as the PDF
             html_file = os.path.join(self.output_directory, 'lighthouse_report.html')
@@ -108,25 +152,31 @@ class Tester:
             if result.returncode == 0 and os.path.exists(html_file):
                 self.results['lighthouse'] = {
                     'html_report_generated': True,
-                    'html_file': 'lighthouse_report.html',  # Relative path for user reference
+                    'html_file': 'lighthouse_report.html',
                     'full_path': html_file,
                     'success': True
                 }
-                print(f"[✓] Lighthouse HTML report generated: lighthouse_report.html")
             else:
-                self.results['lighthouse'] = {
-                    'error': result.stderr or 'Failed to generate Lighthouse HTML report',
-                    'success': False
-                }
+                error_msg = result.stderr[:500] if result.stderr else 'Failed to generate Lighthouse HTML report'
+                self.results['lighthouse'] = {'error': error_msg, 'success': False}
                 
+        except FileNotFoundError:
+            self.results['lighthouse'] = {'error': 'Lighthouse command not found. Is lighthouse installed?'}
+        except subprocess.TimeoutExpired:
+            self.results['lighthouse'] = {'error': 'Lighthouse timed out after 300 seconds'}
         except Exception as e:
-            self.results['lighthouse']['error'] = str(e)
+            self.results['lighthouse'] = {'error': f"Unexpected error: {str(e)}"}
 
     def run_pa11y(self):
         """Run Pa11y accessibility tests"""
         print("[*] Running Pa11y accessibility tests...")
+        
+        # Initialize result structure
+        self.results['pa11y'] = {}
+        
         try:
             # Create config file for Pa11y with Chrome flags for Docker
+            config_file = None
             with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
                 config = {
                     "chromeLaunchConfig": {
@@ -153,7 +203,8 @@ class Tester:
             
             # Clean up config file
             try:
-                os.unlink(config_file)
+                if config_file and os.path.exists(config_file):
+                    os.unlink(config_file)
             except Exception:
                 pass
             
@@ -161,82 +212,68 @@ class Tester:
             output = result.stdout.strip() if result.stdout else ''
             
             if not output:
-                if result.stderr:
-                    self.results['pa11y'] = {'error': result.stderr[:500], 'ran': True}
-                    print(f"[!] Pa11y error: {result.stderr[:200]}")
-                else:
-                    self.results['pa11y'] = {'error': 'No output from pa11y', 'ran': True}
+                error_msg = result.stderr[:500] if result.stderr else 'No output from pa11y'
+                self.results['pa11y'] = {'error': error_msg}
                 return
             
             # Parse JSON output
             try:
                 issues = json.loads(output)
             except json.JSONDecodeError as e:
-                self.results['pa11y'] = {'error': f"JSON parsing error: {e}", 'ran': True}
-                print(f"[!] Pa11y JSON error: {e}")
+                self.results['pa11y'] = {'error': f"JSON parsing error: {str(e)}"}
                 return
             
             # Pa11y returns a list of issues
             if not isinstance(issues, list):
                 issues = []
-            
-            # Categorize by type (error, warning, notice)
-            errors = [i for i in issues if i.get('type') == 'error']
-            warnings = [i for i in issues if i.get('type') == 'warning']
-            notices = [i for i in issues if i.get('type') == 'notice']
-            
-            self.results['pa11y'] = {
-                'ran': True,
-                'total_issues': len(issues),
-                'issues': [
-                    {
-                        'code': issue.get('code', ''),
-                        'type': issue.get('type', 'unknown'),
-                        'message': issue.get('message', ''),
-                        'context': issue.get('context', '') if issue.get('context') else '',
-                        'selector': issue.get('selector', ''),
-                        'runner': issue.get('runner', '')
+                
+                # Categorize by type (error, warning, notice)
+                errors = [i for i in issues if i.get('type') == 'error']
+                warnings = [i for i in issues if i.get('type') == 'warning']
+                notices = [i for i in issues if i.get('type') == 'notice']
+                
+                self.results['pa11y'] = {
+                    'total_issues': len(issues),
+                    'issues': [
+                        {
+                            'code': issue.get('code', ''),
+                            'type': issue.get('type', 'unknown'),
+                            'message': issue.get('message', ''),
+                            'context': issue.get('context', '') if issue.get('context') else '',
+                            'selector': issue.get('selector', ''),
+                            'runner': issue.get('runner', '')
+                        }
+                        for issue in issues
+                    ],
+                    'summary': {
+                        'errors': len(errors),
+                        'warnings': len(warnings),
+                        'notices': len(notices)
                     }
-                    for issue in issues
-                ],
-                'summary': {
-                    'errors': len(errors),
-                    'warnings': len(warnings),
-                    'notices': len(notices)
                 }
-            }
-            
-            print(f"[✓] Pa11y found {len(errors)} errors, {len(warnings)} warnings, {len(notices)} notices")
                 
         except FileNotFoundError:
-            self.results['pa11y'] = {'error': 'pa11y command not found. Is pa11y installed?', 'ran': False}
-            print("[!] Pa11y command not found")
+            self.results['pa11y'] = {'error': 'pa11y command not found. Is pa11y installed?'}
         except subprocess.TimeoutExpired:
-            self.results['pa11y'] = {'error': 'pa11y timed out after 180 seconds', 'ran': True}
-            print("[!] Pa11y timed out")
+            self.results['pa11y'] = {'error': 'pa11y timed out after 180 seconds'}
         except Exception as e:
-            self.results['pa11y'] = {'error': f"Unexpected error: {str(e)}", 'ran': True}
-            print(f"[!] Pa11y error: {e}")
+            self.results['pa11y'] = {'error': f"Unexpected error: {str(e)}"}
 
     def check_security_headers(self):
         """Check security headers using Mozilla Observatory API and manual check"""
         print("[*] Checking security headers...")
         
-        # 1. Robustly extract the hostname
+        # Initialize result structure
+        self.results['security_headers'] = {}
+        
         try:
-            parsed_url = urlparse(self.url)
-            host = parsed_url.netloc
-            if not host:
-                raise ValueError("Invalid URL format.")
-        except Exception as e:
-            self.results['security_headers'] = {'error': f"URL Parsing Error: {str(e)}"}
-            return
-
-        # Use the Mozilla Observatory v2 API endpoint (as documented in the FAQ)
-        api_url = "https://observatory-api.mdn.mozilla.net/api/v2/scan"
-        params = {'host': host}
-
-        try:
+            # Extract hostname
+            host = self._parse_url_host()
+            
+            # Use the Mozilla Observatory v2 API endpoint
+            api_url = "https://observatory-api.mdn.mozilla.net/api/v2/scan"
+            params = {'host': host}
+            
             # Single POST request - the v2 API returns results directly (no polling needed)
             response = requests.post(api_url, params=params, timeout=30)
             response.raise_for_status()
@@ -255,54 +292,56 @@ class Tester:
                     'scanned_at': data.get('scanned_at')
                 }
             elif data and 'error' in data and data['error']:
-                self.results['security_headers'] = {'error': f'Mozilla Observatory error: {data["error"]}'}
+                self.results['security_headers'] = {'error': f"Mozilla Observatory API error: {data['error']}"}
+                return
             else:
-                self.results['security_headers'] = {'error': 'Invalid response from Mozilla Observatory API.'}
+                self.results['security_headers'] = {'error': 'Invalid response from Mozilla Observatory API'}
+                return
 
-            # --- PHASE 3: Manual Header Check ---
-            response = requests.get(self.url, timeout=30, verify=True)
-            headers = response.headers
-            
-            security_headers_check = {
-                'Strict-Transport-Security': headers.get('Strict-Transport-Security', 'Missing'),
-                'Content-Security-Policy': headers.get('Content-Security-Policy', 'Missing'),
-                'X-Frame-Options': headers.get('X-Frame-Options', 'Missing'),
-                'X-Content-Type-Options': headers.get('X-Content-Type-Options', 'Missing'),
-                'Referrer-Policy': headers.get('Referrer-Policy', 'Missing'),
-                'Permissions-Policy': headers.get('Permissions-Policy', 'Missing'),
-                'X-XSS-Protection': headers.get('X-XSS-Protection', 'Missing'),
-            }
-            
-            if 'security_headers' not in self.results:
-                self.results['security_headers'] = {}
-
-            self.results['security_headers']['headers'] = security_headers_check
-            self.results['security_headers']['missing_headers'] = [
-                k for k, v in security_headers_check.items() if v == 'Missing'
-            ]
-            self.results['security_headers']['present_headers'] = [
-                k for k, v in security_headers_check.items() if v != 'Missing'
-            ]
+            # Manual Header Check
+            try:
+                response = requests.get(self.url, timeout=30, verify=True)
+                headers = response.headers
                 
+                security_headers_check = {
+                    'Strict-Transport-Security': headers.get('Strict-Transport-Security', 'Missing'),
+                    'Content-Security-Policy': headers.get('Content-Security-Policy', 'Missing'),
+                    'X-Frame-Options': headers.get('X-Frame-Options', 'Missing'),
+                    'X-Content-Type-Options': headers.get('X-Content-Type-Options', 'Missing'),
+                    'Referrer-Policy': headers.get('Referrer-Policy', 'Missing'),
+                    'Permissions-Policy': headers.get('Permissions-Policy', 'Missing'),
+                    'X-XSS-Protection': headers.get('X-XSS-Protection', 'Missing'),
+                }
+                
+                self.results['security_headers']['headers'] = security_headers_check
+                self.results['security_headers']['missing_headers'] = [
+                    k for k, v in security_headers_check.items() if v == 'Missing'
+                ]
+                self.results['security_headers']['present_headers'] = [
+                    k for k, v in security_headers_check.items() if v != 'Missing'
+                ]
+            except requests.exceptions.RequestException as req_e:
+                # If header check fails, we still have Observatory data, just note the error
+                if 'headers' not in self.results['security_headers']:
+                    self.results['security_headers']['header_check_error'] = f"Failed to check headers: {str(req_e)}"
+                
+        except ValueError as e:
+            self.results['security_headers'] = {'error': str(e)}
         except requests.exceptions.RequestException as req_e:
-            self.results['security_headers']['error'] = f"Request Error: {str(req_e)}"
+            self.results['security_headers'] = {'error': f"Request error: {str(req_e)}"}
         except Exception as e:
-            self.results['security_headers']['error'] = f"General Error: {str(e)}"
+            self.results['security_headers'] = {'error': f"Unexpected error: {str(e)}"}
 
     def test_ssl(self):
         """Test SSL/TLS configuration using sslyze"""
         print("[*] Testing SSL/TLS configuration...")
-
+        
+        # Initialize result structure
+        self.results['ssl'] = {}
+        
         try:
-            parsed_url = urlparse(self.url)
-            hostname = parsed_url.netloc.split(':')[0]
-            if not hostname:
-                raise ValueError("Invalid URL format or missing hostname.")
-        except Exception as e:
-            self.results['ssl'] = {'error': f"URL Parsing Error: {str(e)}"}
-            return
-
-        try:
+            # Extract hostname
+            hostname = self._parse_url_hostname()
             cmd = [
                 'sslyze',
                 '--json_out=-',
@@ -411,16 +450,24 @@ class Tester:
                     'supports_tls_1_2': tls_versions.get('tls_1_2', False),
                 }
                 
-        except json.JSONDecodeError:
-            self.results['ssl'] = {'error': f"Failed to parse sslyze JSON output."}
         except FileNotFoundError:
-            self.results['ssl'] = {'error': 'sslyze not installed', 'https_enabled': self.url.startswith('https')}
-        except Exception as e:
+            self.results['ssl'] = {'error': 'sslyze command not found. Is sslyze installed?'}
+        except subprocess.TimeoutExpired:
+            self.results['ssl'] = {'error': 'sslyze timed out after 120 seconds'}
+        except json.JSONDecodeError:
+            self.results['ssl'] = {'error': 'Failed to parse sslyze JSON output'}
+        except ValueError as e:
             self.results['ssl'] = {'error': str(e)}
+        except Exception as e:
+            self.results['ssl'] = {'error': f"Unexpected error: {str(e)}"}
 
     def run_owasp_zap(self):
         """Run OWASP ZAP baseline scan"""
         print("[*] Running OWASP ZAP baseline scan...")
+        
+        # Initialize result structure
+        self.results['owasp_zap'] = {}
+        
         try:
             # Check if Docker is available
             docker_check = subprocess.run(
@@ -430,8 +477,7 @@ class Tester:
                 timeout=5
             )
             if docker_check.returncode != 0:
-                self.results['owasp_zap'] = {'skipped': 'Docker CLI not available'}
-                print("[!] Docker CLI not found. ZAP scan skipped.")
+                self.results['owasp_zap'] = {'error': 'Docker CLI not available'}
                 return
             
             # Check if ZAP image exists, pull if not
@@ -475,10 +521,7 @@ class Tester:
             # Only treat as error if stdout is empty or contains critical errors
             if not result.stdout and result.stderr:
                 error_msg = result.stderr[:500] if result.stderr else 'Unknown error'
-                self.results['owasp_zap'] = {
-                    'error': f'ZAP scan failed: {error_msg}'
-                }
-                print(f"[!] ZAP scan failed: {error_msg[:200]}")
+                self.results['owasp_zap'] = {'error': f'ZAP scan failed: {error_msg}'}
                 return
             
             # Extract summary counts from final summary line (these are unique alert types)
@@ -543,22 +586,21 @@ class Tester:
                 }
             }
             
-            print(f"[✓] ZAP scan completed: {total_alerts} unique alerts found ({fail_count} high, {warn_count} medium, {info_count} info)")
                 
         except FileNotFoundError:
-            self.results['owasp_zap'] = {'skipped': 'Docker not available'}
-            print("[!] Docker command not found. ZAP scan skipped.")
+            self.results['owasp_zap'] = {'error': 'Docker command not found'}
         except subprocess.TimeoutExpired:
             self.results['owasp_zap'] = {'error': 'ZAP scan timed out after 300 seconds'}
-            print("[!] ZAP scan timed out")
         except Exception as e:
-            self.results['owasp_zap'] = {'error': str(e)}
-            print(f"[!] ZAP scan error: {e}")
+            self.results['owasp_zap'] = {'error': f"Unexpected error: {str(e)}"}
 
     def run_nuclei(self):
         """Run Nuclei vulnerability scanner"""
         print("[*] Running Nuclei vulnerability scanner...")
-
+        
+        # Initialize result structure
+        self.results['nuclei'] = {}
+        
         try:
             cmd = [
                 'nuclei',
@@ -631,54 +673,73 @@ class Tester:
                     }
                 }
             else:
-                self.results['nuclei'] = {'completed': True, 'total_vulnerabilities': 0, 'vulnerabilities': []}
+                self.results['nuclei'] = {
+                    'total_vulnerabilities': 0,
+                    'vulnerabilities': [],
+                    'summary': {
+                        'critical': 0,
+                        'high': 0,
+                        'medium': 0,
+                        'low': 0,
+                        'info': 0,
+                        'unknown': 0
+                    }
+                }
         
+        except FileNotFoundError:
+            self.results['nuclei'] = {'error': 'Nuclei command not found. Is nuclei installed?'}
         except subprocess.TimeoutExpired:
             self.results['nuclei'] = {'error': 'Nuclei scan timed out after 600 seconds'}
-            print("[!] Nuclei scan timed out")
-        except FileNotFoundError:
-            self.results['nuclei'] = {'skipped': 'Nuclei not installed'}
         except Exception as e:
-            self.results['nuclei'] = {'error': str(e)}
+            self.results['nuclei'] = {'error': f"Unexpected error: {str(e)}"}
 
     def validate_w3c(self):
         """Validate HTML using W3C Validator"""
         print("[*] Running W3C HTML Validator...")
+        
+        # Initialize result structure
+        self.results['w3c_validator'] = {}
+        
         try:
             api_url = f"https://validator.w3.org/nu/?doc={self.url}&out=json"
             
             response = requests.get(api_url, timeout=60, headers={
                 'User-Agent': 'Mozilla/5.0 (compatible; WebsiteTester/1.0)'
             })
+            response.raise_for_status()
             data = response.json()
             
             messages = data.get('messages', [])
+            errors = [m for m in messages if m.get('type') == 'error']
+            warnings = [m for m in messages if m.get('type') == 'info' or m.get('subType') == 'warning']
             
             self.results['w3c_validator'] = {
                 'total_issues': len(messages),
-                'errors': [m for m in messages if m.get('type') == 'error'],
-                'warnings': [m for m in messages if m.get('type') == 'info' or m.get('subType') == 'warning'],
+                'errors': errors,
+                'warnings': warnings,
                 'summary': {
-                    'errors': len([m for m in messages if m.get('type') == 'error']),
-                    'warnings': len([m for m in messages if m.get('type') == 'info' or m.get('subType') == 'warning'])
+                    'errors': len(errors),
+                    'warnings': len(warnings)
                 }
             }
             
+        except requests.exceptions.RequestException as req_e:
+            self.results['w3c_validator'] = {'error': f"Request error: {str(req_e)}"}
         except Exception as e:
-            self.results['w3c_validator'] = {'error': str(e)}
+            self.results['w3c_validator'] = {'error': f"Unexpected error: {str(e)}"}
 
     def check_robots_sitemap(self):
         """Check robots.txt and sitemap.xml"""
         print("[*] Checking robots.txt and sitemap.xml...")
         
+        # Initialize result structure
+        self.results['robots_sitemap'] = {
+            'robots_txt': {},
+            'sitemap': {}
+        }
+        
         try:
-            parsed_url = urlparse(self.url)
-            base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
-            
-            result = {
-                'robots_txt': {},
-                'sitemap': {}
-            }
+            base_url = self._parse_url_base()
             
             # Check robots.txt
             try:
@@ -686,16 +747,21 @@ class Tester:
                 response = requests.get(robots_url, timeout=30)
                 if response.status_code == 200:
                     content = response.text
-                    result['robots_txt'] = {
+                    self.results['robots_sitemap']['robots_txt'] = {
                         'exists': True,
                         'size': len(content),
                         'has_sitemap_reference': 'sitemap' in content.lower(),
                         'has_disallow_rules': 'disallow' in content.lower(),
                     }
                 else:
-                    result['robots_txt'] = {'exists': False, 'status_code': response.status_code}
+                    self.results['robots_sitemap']['robots_txt'] = {
+                        'exists': False,
+                        'status_code': response.status_code
+                    }
+            except requests.exceptions.RequestException as req_e:
+                self.results['robots_sitemap']['robots_txt'] = {'error': f"Request error: {str(req_e)}"}
             except Exception as e:
-                result['robots_txt'] = {'error': str(e)}
+                self.results['robots_sitemap']['robots_txt'] = {'error': f"Unexpected error: {str(e)}"}
             
             # Check sitemap.xml
             try:
@@ -703,36 +769,40 @@ class Tester:
                 response = requests.get(sitemap_url, timeout=30)
                 if response.status_code == 200:
                     content = response.text
-                    # Count URLs in sitemap
                     url_count = content.lower().count('<url>')
-                    result['sitemap'] = {
+                    self.results['robots_sitemap']['sitemap'] = {
                         'exists': True,
                         'size': len(content),
                         'url_count': url_count,
                         'is_valid_xml': content.strip().startswith('<?xml') or content.strip().startswith('<urlset')
                     }
                 else:
-                    result['sitemap'] = {'exists': False, 'status_code': response.status_code}
+                    self.results['robots_sitemap']['sitemap'] = {
+                        'exists': False,
+                        'status_code': response.status_code
+                    }
+            except requests.exceptions.RequestException as req_e:
+                self.results['robots_sitemap']['sitemap'] = {'error': f"Request error: {str(req_e)}"}
             except Exception as e:
-                result['sitemap'] = {'error': str(e)}
+                self.results['robots_sitemap']['sitemap'] = {'error': f"Unexpected error: {str(e)}"}
             
-            self.results['robots_sitemap'] = result
-            
-        except Exception as e:
+        except ValueError as e:
             self.results['robots_sitemap'] = {'error': str(e)}
+        except Exception as e:
+            self.results['robots_sitemap'] = {'error': f"Unexpected error: {str(e)}"}
 
     def check_dns(self):
         """Check DNS records for the domain"""
         print("[*] Checking DNS records...")
         
+        # Initialize result structure
+        self.results['dns'] = {
+            'records': {}
+        }
+        
         try:
-            parsed_url = urlparse(self.url)
-            hostname = parsed_url.netloc.split(':')[0]
-            
-            result = {
-                'hostname': hostname,
-                'records': {}
-            }
+            hostname = self._parse_url_hostname()
+            self.results['dns']['hostname'] = hostname
             
             # Check various DNS record types
             record_types = ['A', 'AAAA', 'MX', 'TXT', 'NS', 'CNAME']
@@ -740,48 +810,43 @@ class Tester:
             for record_type in record_types:
                 try:
                     answers = dns.resolver.resolve(hostname, record_type)
-                    result['records'][record_type] = [str(rdata) for rdata in answers]
+                    self.results['dns']['records'][record_type] = [str(rdata) for rdata in answers]
                 except dns.resolver.NoAnswer:
-                    result['records'][record_type] = []
+                    self.results['dns']['records'][record_type] = []
                 except dns.resolver.NXDOMAIN:
-                    result['records'][record_type] = ['NXDOMAIN']
+                    self.results['dns']['records'][record_type] = ['NXDOMAIN']
                 except Exception:
-                    result['records'][record_type] = []
+                    self.results['dns']['records'][record_type] = []
             
             # Check for CAA records (Certificate Authority Authorization)
             try:
                 answers = dns.resolver.resolve(hostname, 'CAA')
-                result['records']['CAA'] = [str(rdata) for rdata in answers]
-                result['has_caa'] = True
+                self.results['dns']['records']['CAA'] = [str(rdata) for rdata in answers]
+                self.results['dns']['has_caa'] = True
             except Exception:
-                result['records']['CAA'] = []
-                result['has_caa'] = False
+                self.results['dns']['records']['CAA'] = []
+                self.results['dns']['has_caa'] = False
             
             # Check if DNSSEC is enabled (basic check)
             try:
                 answers = dns.resolver.resolve(hostname, 'DNSKEY')
-                result['dnssec_enabled'] = True
+                self.results['dns']['dnssec_enabled'] = True
             except Exception:
-                result['dnssec_enabled'] = False
+                self.results['dns']['dnssec_enabled'] = False
             
-            self.results['dns'] = result
-            
-        except Exception as e:
+        except ValueError as e:
             self.results['dns'] = {'error': str(e)}
+        except Exception as e:
+            self.results['dns'] = {'error': f"Unexpected error: {str(e)}"}
 
     def _is_test_enabled(self, test_key: str) -> bool:
-        """Check if a test was enabled and has results (not skipped/error only)"""
+        """Check if a test was enabled and has results (not error-only)"""
         if test_key not in self.results:
             return False
         result = self.results[test_key]
         if isinstance(result, dict):
-            if result.get('skipped'):
-                return False
-            # For pa11y, show in PDF even if there was an error (so user knows it ran)
-            if test_key == 'pa11y' and result.get('ran'):
-                return True
-            # For other tests, skip if only error and nothing else useful
-            if result.get('error') and len(result) <= 2:  # error + ran
+            # If only error key exists, don't show in PDF (test failed completely)
+            if 'error' in result and len(result) == 1:
                 return False
             if not result:  # Empty dict
                 return False
@@ -1166,6 +1231,11 @@ class Tester:
             story.append(Spacer(1, 0.25 * inch))
 
             vulns = nuclei.get('vulnerabilities', [])
+            
+            if not vulns:
+                story.append(Paragraph("<b>✓ No vulnerabilities found.</b>", styles['Normal']))
+                story.append(PageBreak())
+                return
 
             for idx, vuln in enumerate(vulns, start=1):
                 severity = (vuln.get('severity') or 'unknown').upper()
@@ -1356,6 +1426,7 @@ Examples:
   python tester.py https://example.com
   python tester.py https://example.com -o ./reports -w 8
   python tester.py https://example.com --json results.json
+  python tester.py https://example.com --enable-zap --enable-nuclei
 
 Tests performed:
   - Lighthouse (Performance, SEO, Accessibility, Best Practices)
@@ -1366,9 +1437,9 @@ Tests performed:
   - Robots.txt & Sitemap Check
   - DNS Records Analysis
   
-Optional (uncomment in code to enable):
-  - OWASP ZAP (Security Scan)
-  - Nuclei (Vulnerability Scanner)
+Optional (use flags to enable):
+  - OWASP ZAP (Security Scan) - use --enable-zap
+  - Nuclei (Vulnerability Scanner) - use --enable-nuclei
         """
     )
     
@@ -1378,8 +1449,16 @@ Optional (uncomment in code to enable):
     parser.add_argument('-j', '--json', help='Save JSON results to file')
     parser.add_argument('-w', '--workers', type=int, default=5,
                        help='Number of parallel workers (default: 5)')
+    parser.add_argument('--enable-zap', action='store_true',
+                       help='Enable OWASP ZAP security scan (requires Docker socket access)')
+    parser.add_argument('--enable-nuclei', action='store_true',
+                       help='Enable Nuclei vulnerability scanner')
     
     args = parser.parse_args()
+    
+    # Both are disabled by default, only enabled if flags are provided
+    enable_zap = args.enable_zap
+    enable_nuclei = args.enable_nuclei
     
     # Validate URL
     if not args.url.startswith(('http://', 'https://')):
@@ -1390,7 +1469,13 @@ Optional (uncomment in code to enable):
     print("="*80)
     
     # Run tests
-    tester = Tester(args.url, max_workers=args.workers, output_directory=args.output)
+    tester = Tester(
+        args.url, 
+        max_workers=args.workers, 
+        output_directory=args.output,
+        enable_zap=enable_zap,
+        enable_nuclei=enable_nuclei
+    )
     test_results = tester.run_all_tests()
 
     # Save JSON if requested

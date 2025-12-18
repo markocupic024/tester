@@ -78,6 +78,8 @@ docker run --rm $(pwd)/reports:/output tester https://example.com
 | `-o, --output` | Where to save reports | /output |
 | `-j, --json` | Save raw results as JSON | - |
 | `-w, --workers` | How many tests to run at once | 5 |
+| `--enable-zap` | Enable OWASP ZAP security scan | Disabled |
+| `--enable-nuclei` | Enable Nuclei vulnerability scanner | Disabled |
 | `-h, --help` | Show all options | - |
 
 ### Examples
@@ -94,6 +96,12 @@ docker run --rm $(pwd)/reports:/output tester https://example.com -w 8
 
 # Everything combined
 docker run --rm $(pwd)/reports:/output tester https://example.com -o /output -j /output/data.json -w 10
+
+# Enable both ZAP and Nuclei scans
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock $(pwd)/reports:/output tester https://example.com --enable-zap --enable-nuclei
+
+# Enable only ZAP scan
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock $(pwd)/reports:/output tester https://example.com --enable-zap
 ```
 
 ## What You Get
@@ -162,18 +170,31 @@ Here's what gets checked:
 
 *Some security tests are disabled by default - see below for how to enable them
 
-## Making It Faster
+## Configuring Security Scans
 
-### Enable Extra Security Checks
+### OWASP ZAP
 
-For thorough security testing, you can turn on OWASP ZAP and Nuclei scans. Just edit `tester.py` and uncomment these lines in the `run_all_tests()` method:
+OWASP ZAP is disabled by default. To enable it, use the `--enable-zap` flag:
 
-```python
-# ('OWASP ZAP Security Scan', self.run_owasp_zap),
-# ('Nuclei Vulnerability Scanner', self.run_nuclei),
+```bash
+# Using Docker (requires Docker socket access)
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock $(pwd)/reports:/output tester https://example.com --enable-zap
+
+# Using Docker Compose (uncomment the docker socket volume in docker-compose.yml first)
+docker compose run --rm tester https://example.com --enable-zap
 ```
 
-**Note:** OWASP ZAP needs Docker socket access, so update your `docker-compose.yml` if using Compose.
+**Note:** OWASP ZAP requires Docker socket access because it runs ZAP in a separate Docker container.
+
+### Nuclei
+
+Nuclei is **disabled by default**. To enable it, use the `--enable-nuclei` flag:
+
+```bash
+docker run --rm $(pwd)/reports:/output tester https://example.com --enable-nuclei
+```
+
+## Making It Faster
 
 ### Speed Things Up
 

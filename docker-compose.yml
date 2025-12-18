@@ -8,8 +8,8 @@ services:
     volumes:
       # Mount reports directory for output
       - ./reports:/output
-      # Uncomment this line to enable OWASP ZAP support
-  #   - /var/run/docker.sock:/var/run/docker.sock
+      # OWASP ZAP support
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       # Chromium configuration
       - CHROME_BIN=/usr/bin/chromium
