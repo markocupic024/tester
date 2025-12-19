@@ -46,6 +46,10 @@ Then test a website:
 docker compose run --rm tester https://example.com
 ```
 
+**Note:** With docker-compose, the output directory is fixed to `./reports` (mounted as `/output` in the container). To use a custom output directory, either:
+- Set the `OUTPUT_DIR` environment variable: `OUTPUT_DIR=./my-reports docker compose run --rm tester https://example.com`
+- Or use `docker run` directly (see below)
+
 ### Or Use Docker Directly
 
 Build the image:

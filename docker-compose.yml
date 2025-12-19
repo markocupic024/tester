@@ -6,8 +6,8 @@ services:
     image: tester:latest
     container_name: tester
     volumes:
-      # Mount reports directory for output
-      - ./reports:/output
+      # Mount reports directory for output (can be overridden with OUTPUT_DIR env var)
+      - ${OUTPUT_DIR:-./reports}:/output
       # OWASP ZAP support
       - /var/run/docker.sock:/var/run/docker.sock
     environment:

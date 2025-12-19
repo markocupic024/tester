@@ -10,7 +10,6 @@ import json
 import os
 import subprocess
 import tempfile
-import re
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
@@ -37,6 +36,10 @@ class Tester:
         self.enable_zap = enable_zap
         self.enable_nuclei = enable_nuclei
         self.enabled_tests = set()  # Track which tests are enabled
+        
+        # Ensure output directory exists
+        if self.output_directory and not os.path.exists(self.output_directory):
+            os.makedirs(self.output_directory, exist_ok=True)
         self.results = {
             'url': url,
             'timestamp': datetime.now().isoformat(),
@@ -502,90 +505,187 @@ class Tester:
                     print(f"[!] Failed to pull ZAP image: {pull_result.stderr[:200] if pull_result.stderr else 'Unknown error'}")
                     return
             
-            cmd = [
-                'docker', 'run', '--rm',
-                'zaproxy/zap-stable',
-                'zap-baseline.py',
-                '-t', self.url,
-                '-I'
-            ]
+            # For Docker-in-Docker: find the HOST path for the output directory
+            # This must match the user's --output flag, not a hardcoded path
+            json_file = os.path.join(self.output_directory, 'zap_report.json')
+            zap_data = None
+            host_output_path = None
             
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=300
-            )
+            # Try to detect host path by inspecting container mounts
+            # This respects the user's --output flag
+            try:
+                container_name = os.environ.get('HOSTNAME') or 'tester'
+                inspect_result = subprocess.run(
+                    ['docker', 'inspect', '--format', '{{json .Mounts}}', container_name],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                if inspect_result.returncode == 0 and inspect_result.stdout:
+                    mounts = json.loads(inspect_result.stdout)
+                    for mount in mounts:
+                        if mount.get('Destination') == self.output_directory:
+                            host_output_path = mount.get('Source')
+                            break
+            except Exception:
+                pass
             
-            # ZAP returns non-zero exit codes when alerts are found, which is normal
-            # Only treat as error if stdout is empty or contains critical errors
-            if not result.stdout and result.stderr:
-                error_msg = result.stderr[:500] if result.stderr else 'Unknown error'
-                self.results['owasp_zap'] = {'error': f'ZAP scan failed: {error_msg}'}
+            if not host_output_path:
+                try:
+                    with open('/proc/self/cgroup', 'r') as f:
+                        for line in f:
+                            if 'docker' in line or 'containerd' in line:
+                                parts = line.split('/')
+                                if len(parts) > 0:
+                                    container_id = parts[-1]
+                                    for cid in [container_id, container_id[:12]]:
+                                        inspect_result = subprocess.run(
+                                            ['docker', 'inspect', '--format', '{{json .Mounts}}', cid],
+                                            capture_output=True,
+                                            text=True,
+                                            timeout=10
+                                        )
+                                        if inspect_result.returncode == 0 and inspect_result.stdout:
+                                            mounts = json.loads(inspect_result.stdout)
+                                            for mount in mounts:
+                                                if mount.get('Destination') == self.output_directory:
+                                                    host_output_path = mount.get('Source')
+                                                    break
+                                            if host_output_path:
+                                                break
+                                    if host_output_path:
+                                        break
+                except Exception:
+                    pass
+            
+            if not host_output_path:
+                host_output_path = self.output_directory
+            
+            try:
+                cmd = [
+                    'docker', 'run', '--rm',
+                    '-v', f'{host_output_path}:/zap/wrk/:rw',
+                    'zaproxy/zap-stable',
+                    'zap-baseline.py',
+                    '-t', self.url,
+                    '-I',
+                    '--autooff',  # Disable Automation Framework so -J flag works
+                    '-J', '/zap/wrk/zap_report.json'  # JSON output format
+                ]
+                
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=300
+                )
+                
+                if not os.path.exists(json_file):
+                    error_msg = result.stderr[:500] if result.stderr else 'ZAP scan completed but JSON file not found'
+                    self.results['owasp_zap'] = {'error': f'ZAP scan failed: {error_msg}'}
+                    return
+                
+                # Read JSON file
+                try:
+                    with open(json_file, 'r') as f:
+                        zap_data = json.load(f)
+                    if not zap_data:
+                        self.results['owasp_zap'] = {'error': 'ZAP JSON file is empty'}
+                        return
+                except json.JSONDecodeError as e:
+                    self.results['owasp_zap'] = {'error': f'Failed to parse ZAP JSON output: {str(e)}'}
+                    return
+                except Exception as e:
+                    self.results['owasp_zap'] = {'error': f'Failed to read ZAP JSON file: {str(e)}'}
+                    return
+            finally:
+                # Clean up the ZAP JSON file
+                try:
+                    if os.path.exists(json_file):
+                        os.remove(json_file)
+                except Exception:
+                    pass
+            
+            # Extract alerts from JSON structure
+            # ZAP JSON structure: {"site": [{"alerts": [...], "@name": "...", "@host": "..."}]}
+            alerts = []
+            if not zap_data:
+                # If zap_data is None, set empty results
+                self.results['owasp_zap'] = {
+                    'total_alerts': 0,
+                    'alerts': [],
+                    'summary': {'high': 0, 'medium': 0, 'low': 0, 'info': 0}
+                }
                 return
-            
-            # Extract summary counts from final summary line (these are unique alert types)
-            # Format: "FAIL-NEW: 0     FAIL-INPROG: 0  WARN-NEW: 14    WARN-INPROG: 0  INFO: 0 IGNORE: 0       PASS: 53"
-            fail_new_match = re.search(r'FAIL-NEW:\s*(\d+)', result.stdout)
-            warn_new_match = re.search(r'WARN-NEW:\s*(\d+)', result.stdout)
-            info_match = re.search(r'INFO:\s*(\d+)', result.stdout)
-            
-            fail_count = int(fail_new_match.group(1)) if fail_new_match else 0
-            warn_count = int(warn_new_match.group(1)) if warn_new_match else 0
-            info_count = int(info_match.group(1)) if info_match else 0
-            
-            # Parse unique alert types from stdout (not occurrences)
-            # Format: "WARN-NEW: Alert Name [ID] x count" - count is occurrences, we want unique types
-            parsed_alerts = []
-            seen_alerts = set()  # Track unique alerts by ID to avoid duplicates
-            
-            lines = result.stdout.split('\n')
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
                 
-                # Match WARN-NEW or FAIL-NEW alert lines
-                warn_match = re.match(r'WARN-NEW:\s+(.+?)\s+\[(\d+)\]\s+x\s+(\d+)', line)
-                fail_match = re.match(r'FAIL-NEW:\s+(.+?)\s+\[(\d+)\]\s+x\s+(\d+)', line)
+            try:
+                site_data = zap_data.get('site', [])
                 
-                if warn_match:
-                    alert_name = warn_match.group(1).strip()
-                    alert_id = warn_match.group(2)
-                    # Only add unique alert types, not occurrences
-                    if alert_id not in seen_alerts:
-                        seen_alerts.add(alert_id)
-                        parsed_alerts.append({
-                            'name': alert_name,
-                            'risk': 'Medium',
-                            'id': alert_id
-                        })
-                elif fail_match:
-                    alert_name = fail_match.group(1).strip()
-                    alert_id = fail_match.group(2)
-                    # Only add unique alert types, not occurrences
-                    if alert_id not in seen_alerts:
-                        seen_alerts.add(alert_id)
-                        parsed_alerts.append({
-                            'name': alert_name,
-                            'risk': 'High',
-                            'id': alert_id
-                        })
+                if isinstance(site_data, list) and len(site_data) > 0:
+                    # Get alerts from the first site entry
+                    site_alerts = site_data[0].get('alerts', [])
+                    
+                    if isinstance(site_alerts, list):
+                        for alert in site_alerts:
+                            if not isinstance(alert, dict):
+                                continue
+                                
+                            # Extract alert information
+                            alert_instances = alert.get('instances', [])
+                            alert_count = len(alert_instances) if alert_instances else 0
+                            
+                            # Map ZAP risk levels: 0=Informational, 1=Low, 2=Medium, 3=High, 4=Critical
+                            risk_level = alert.get('riskcode')
+                            if risk_level is None:
+                                risk_level = alert.get('risk', 0)
+                            
+                            if isinstance(risk_level, str):
+                                try:
+                                    risk_level = int(risk_level)
+                                except (ValueError, TypeError):
+                                    risk_level = 0
+                            elif risk_level is None:
+                                risk_level = 0
+                            
+                            risk_map = {
+                                0: 'Informational',
+                                1: 'Low',
+                                2: 'Medium',
+                                3: 'High',
+                                4: 'Critical'
+                            }
+                            risk = risk_map.get(risk_level, 'Unknown')
+                            
+                            alerts.append({
+                                'name': alert.get('name', 'Unknown'),
+                                'id': str(alert.get('pluginid', '')),
+                                'risk': risk,
+                                'count': alert_count,
+                                'description': alert.get('desc', ''),
+                                'solution': alert.get('solution', ''),
+                                'reference': alert.get('reference', ''),
+                                'cweid': alert.get('cweid', ''),
+                                'wascid': alert.get('wascid', '')
+                            })
+            except Exception:
+                pass
             
-            # Use summary counts for totals (these are the correct unique alert counts)
-            total_alerts = fail_count + warn_count + info_count
+            high_count = len([a for a in alerts if a.get('risk') in ['High', 'Critical']])
+            medium_count = len([a for a in alerts if a.get('risk') == 'Medium'])
+            low_count = len([a for a in alerts if a.get('risk') == 'Low'])
+            info_count = len([a for a in alerts if a.get('risk') == 'Informational'])
+            total_alerts = len(alerts)
             
             self.results['owasp_zap'] = {
                 'total_alerts': total_alerts,
-                'alerts': parsed_alerts,
+                'alerts': alerts,
                 'summary': {
-                    'high': fail_count,
-                    'medium': warn_count,
-                    'low': 0,
+                    'high': high_count,
+                    'medium': medium_count,
+                    'low': low_count,
                     'info': info_count
                 }
             }
-            
                 
         except FileNotFoundError:
             self.results['owasp_zap'] = {'error': 'Docker command not found'}
@@ -855,6 +955,11 @@ class Tester:
     def generate_pdf_report(self, output_file: str = 'website_test_report.pdf'):
         """Generate comprehensive PDF report"""
         print(f"\n[*] Generating PDF report: {output_file}")
+        
+        # Ensure output directory exists
+        output_dir = os.path.dirname(output_file)
+        if output_dir and not os.path.exists(output_dir):
+            os.makedirs(output_dir, exist_ok=True)
         
         doc = SimpleDocTemplate(output_file, pagesize=letter)
         story = []
@@ -1204,7 +1309,7 @@ class Tester:
                     for alert in info_alerts[:5]:
                         story.append(Paragraph(f"• {html.escape(alert.get('name', 'Unknown'))}", styles['Normal']))
             else:
-                story.append(Paragraph("No detailed alerts available.", styles['Normal']))
+                story.append(Paragraph("<b>✓ No security alerts found.</b>", styles['Normal']))
             
             story.append(Spacer(1, 0.2*inch))
         
@@ -1480,6 +1585,9 @@ Optional (use flags to enable):
 
     # Save JSON if requested
     if args.json:
+        json_dir = os.path.dirname(args.json)
+        if json_dir and not os.path.exists(json_dir):
+            os.makedirs(json_dir, exist_ok=True)
         with open(args.json, 'w') as f:
             json.dump(test_results, f, indent=2, default=str)
         print(f"\n[✓] JSON results saved to: {args.json}")
