@@ -60,9 +60,11 @@ class Tester:
         print(f"Starting comprehensive tests for: {self.url}")
         print(f"{'='*80}\n")
         
-        # Define all available tests
+        # Check if security scans are enabled (nuclei or zap)
+        security_scans_enabled = self.enable_zap or self.enable_nuclei
+        
+        # Define all available tests (excluding lighthouse if security scans are enabled)
         all_tests = [
-            ('Lighthouse (Performance/SEO/Accessibility/Best Practices)', self.run_lighthouse),
             ('Pa11y (Accessibility)', self.run_pa11y),
             ('Security Headers Analysis', self.check_security_headers),
             ('SSL/TLS Testing (sslyze)', self.test_ssl),
@@ -70,6 +72,11 @@ class Tester:
             ('Robots.txt & Sitemap', self.check_robots_sitemap),
             ('DNS Records', self.check_dns),
         ]
+        
+        # Add lighthouse to parallel tests only if security scans are NOT enabled
+        # (if security scans are enabled, lighthouse will run after they complete)
+        if not security_scans_enabled:
+            all_tests.insert(0, ('Lighthouse (Performance/SEO/Accessibility/Best Practices)', self.run_lighthouse))
         
         # Conditionally add security scans based on configuration
         if self.enable_zap:
@@ -80,6 +87,7 @@ class Tester:
         
         print()  # Empty line for readability
         
+        # Run tests in parallel (this includes nuclei/zap if enabled, but NOT lighthouse)
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = {executor.submit(test_func): name for name, test_func in all_tests}
             
@@ -92,6 +100,19 @@ class Tester:
                     self.enabled_tests.add(test_name)
                 except Exception as e:
                     print(f"[✗] {test_name} failed: {e}")
+        
+        # If security scans are enabled, run lighthouse AFTER they complete
+        # to ensure lighthouse never runs in parallel with nuclei/zap
+        if security_scans_enabled:
+            print()  # Empty line before lighthouse
+            print("[*] Running Lighthouse after security scans complete...")
+            lighthouse_name = 'Lighthouse (Performance/SEO/Accessibility/Best Practices)'
+            try:
+                self.run_lighthouse()
+                print(f"[✓] {lighthouse_name} completed")
+                self.enabled_tests.add(lighthouse_name)
+            except Exception as e:
+                print(f"[✗] {lighthouse_name} failed: {e}")
         
         return self.results
 
@@ -1267,7 +1288,7 @@ class Tester:
         # OWASP ZAP
         if self._is_test_enabled('owasp_zap'):
             zap = self.results['owasp_zap']
-            story.append(Paragraph(f"<b>OWASP ZAP Scan: {zap.get('total_alerts', 0)} alerts</b>", styles['Normal']))
+            story.append(Paragraph(f"<b>OWASP Scan: {zap.get('total_alerts', 0)} alerts</b>", styles['Normal']))
             
             summary = zap.get('summary', {})
             story.append(Paragraph(
