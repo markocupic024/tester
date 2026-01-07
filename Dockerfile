@@ -80,11 +80,6 @@ RUN ARCH=$(dpkg --print-architecture) && \
     rm nuclei_${NUCLEI_VERSION}_${NUCLEI_ARCH}.zip && \
     nuclei -update-templates
 
-# Install testssl.sh
-RUN git clone --depth 1 https://github.com/drwetter/testssl.sh.git /opt/testssl.sh && \
-    ln -s /opt/testssl.sh/testssl.sh /usr/local/bin/testssl.sh && \
-    chmod +x /usr/local/bin/testssl.sh
-
 # Copy application
 COPY tester.py .
 
